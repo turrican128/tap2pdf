@@ -161,6 +161,11 @@ python tools/qa_sweep.py "C:/tapes" --recurse --json baseline.json
 python tools/qa_sweep.py "C:/tapes" --recurse --compare baseline.json
 ```
 
+1.0 was swept over 49 commercial tapes this way - Ocean, Hit Squad, Activision,
+Sega conversions, multi-side releases, up to 2.4M pulses - with no crashes and
+no contradictory verdicts. None of those tapes are in this repository, which is
+the whole reason the sweep exists.
+
 Its invariant: **a refusal is a pass, a crash is a bug.** Refusing a damaged tape is the tool working. `--compare` diffs a run against a saved baseline, which is what to use after changing anything in the classifier.
 
 ## Building from source

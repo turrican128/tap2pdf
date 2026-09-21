@@ -40,6 +40,15 @@ recovered.
   identical across four genuinely different crunched files, and a committed
   sample keeps it tested. When nothing matches, the dossier says no known
   cruncher was recognised — never that the file is uncrunched.
+- **The verdict cannot call a read clean when nothing was read.** Sweeping 49
+  real commercial tapes found four - Cobra (The Hit Squad), Time Scanner side 2,
+  both WWF sides - whose pulses look like the CBM ROM loader but yield no
+  complete block. The verdict claimed the CBM portion read cleanly while the
+  checksum row in the same table said NOT CHECKED. Pulses shaped like a loader
+  are not data that was read, and it says so now.
+- **Verified against 49 commercial tapes** - Ocean, Hit Squad, Activision, Sega
+  conversions, multi-side releases, up to 2.4M pulses - with no crashes and no
+  contradictory verdicts. None of them are in this repository.
 - `tools/qa_sweep.py` runs the tool over a folder of real tapes, where a refusal
   is a pass and only a crash is a failure. Real tapes cannot live in this repo,
   so this is how they get exercised.
