@@ -67,7 +67,28 @@ def test_the_verdict_does_not_outrun_the_evidence():
 def test_a_clean_tape_still_refuses_a_blanket_clean_bill_of_health():
     # Loader identification is NOT CHECKED without tapclean even on a
     # perfect tape, so the verdict must say the check list is incomplete.
-    _h, _pulses, regions, _files, checks = analyse("clean_single.tap")
-    text = tap2pdf.verdict(checks, regions)
+    _h, _pulses, regions, files, checks = analyse("clean_single.tap")
+    text = tap2pdf.verdict(checks, regions, files)
     assert "reads cleanly" in text
     assert "not a clean bill of health" in text
+
+
+def test_cbm_shaped_pulses_with_nothing_decoded_do_not_claim_a_clean_read():
+    # Found by the real-tape sweep: 4 of 49 commercial tapes have regions
+    # that LOOK like the CBM ROM loader but yield no complete block. The
+    # verdict said "the CBM portion of this tape reads cleanly" while the
+    # checksum row in the same table said NOT CHECKED. Pulses that look
+    # like a loader are not data that was read.
+    regions = [tap2pdf.Region("cbm", 0, 256, 256, 100000)]
+    checks = [tap2pdf.Check("CBM block checksums", tap2pdf.NOT_CHECKED,
+                            "no CBM ROM-loader blocks were found on this tape")]
+    text = tap2pdf.verdict(checks, regions, files=[])
+    assert "reads cleanly" not in text
+    assert "no complete block could be decoded" in text
+
+
+def test_cbm_regions_with_files_still_read_cleanly():
+    regions = [tap2pdf.Region("cbm", 0, 256, 256, 100000)]
+    checks = [tap2pdf.Check("CBM block checksums", tap2pdf.PASS, "all pass")]
+    text = tap2pdf.verdict(checks, regions, files=[object()])
+    assert "reads cleanly" in text

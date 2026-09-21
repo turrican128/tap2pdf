@@ -667,18 +667,31 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None):
     return checks
 
 
-def verdict(checks, regions):
-    """One plain sentence that never outruns the evidence."""
+def verdict(checks, regions, files=None):
+    """One plain sentence that never outruns the evidence.
+
+    The `files` argument is not decoration. Without it this said "the CBM
+    portion of this tape reads cleanly" whenever any region merely LOOKED
+    CBM-shaped - even when not one complete block had been decoded from it,
+    and the checksum row in the same table said NOT CHECKED. Four real tapes
+    out of forty-nine produced that contradiction. Pulses that look like a
+    ROM loader are not the same as data that was read.
+    """
     failed = [c for c in checks if c.result == FAIL]
     unchecked = [c for c in checks if c.result == NOT_CHECKED]
     has_cbm = any(r.kind == "cbm" for r in regions)
+    decoded = len(files) if files is not None else None
     parts = []
     if failed:
         parts.append("This tape has %d failing check(s): %s."
                      % (len(failed), ", ".join(c.name.lower()
                                                for c in failed)))
-    elif has_cbm:
+    elif has_cbm and decoded:
         parts.append("The CBM portion of this tape reads cleanly.")
+    elif has_cbm:
+        parts.append("Pulses shaped like the CBM ROM loader are present, but "
+                     "no complete block could be decoded from them, so "
+                     "nothing here has been read.")
     else:
         parts.append("No CBM ROM-loader data was found on this tape.")
     if unchecked:
@@ -838,7 +851,7 @@ def analyse(data, args):
     return Dossier(
         title=getattr(args, "title", None) or os.path.basename(args.tape),
         header=header, regions=regions, files=files, checks=checks,
-        verdict_text=verdict(checks, regions), sys_entry=sys_entry,
+        verdict_text=verdict(checks, regions, files), sys_entry=sys_entry,
         packers=packers,
         loaders=loaders,
         duration=seconds(total_cycles(pulses), header),
