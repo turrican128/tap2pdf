@@ -39,12 +39,15 @@ def main():
     args = tap2pdf.build_parser().parse_args([str(tape)])
     dossier = tap2pdf.analyse(tape.read_bytes(), args)
 
+    # open(), not Path.write_text(newline=...): that keyword only exists from
+    # Python 3.10, and 3.9 is the floor this project promises. Local Python
+    # was newer, so only the CI matrix caught it.
     html = EXAMPLES / "example-dossier.html"
-    html.write_text(tap2pdf.render_html(dossier), encoding="utf-8",
-                    newline="\n")
+    with open(str(html), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(tap2pdf.render_html(dossier))
     nfo = EXAMPLES / "example-dossier.nfo"
-    nfo.write_text(tap2pdf.render_nfo(dossier), encoding="utf-8",
-                   newline="\n")
+    with open(str(nfo), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(tap2pdf.render_nfo(dossier))
 
     for p in (tape, html, nfo):
         print("%-28s %7d bytes" % (p.name, p.stat().st_size))
