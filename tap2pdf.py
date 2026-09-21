@@ -73,6 +73,65 @@ def parse_header(data):
                      actual - declared)
 
 
+OVERFLOW_CYCLES = 255 * 8
+
+
+@dataclass
+class Pulse:
+    cycles: int
+    overflow: bool
+    offset: int
+
+
+def decode_pulses(data, header):
+    """Pulses, in clock cycles.
+
+    A non-zero byte B is B*8 cycles. A $00 byte means different things in the
+    two versions, and this is the easiest thing in the format to get wrong:
+
+      v0: 'longer than 255*8 cycles, length not recorded'. Carried as
+          overflow=True with OVERFLOW_CYCLES as a floor, never as zero.
+      v1: followed by three bytes, little-endian, giving the length in clock
+          cycles DIRECTLY - not multiplied by 8.
+    """
+    body = data[HEADER_SIZE:]
+    if not body:
+        raise Refusal(EXIT_MALFORMED, "the TAP holds no pulse data at all")
+    pulses = []
+    i = 0
+    n = len(body)
+    while i < n:
+        b = body[i]
+        if b:
+            pulses.append(Pulse(b * 8, False, i))
+            i += 1
+        elif header.version == 0:
+            pulses.append(Pulse(OVERFLOW_CYCLES, True, i))
+            i += 1
+        else:
+            if i + 3 >= n:
+                raise Refusal(
+                    EXIT_MALFORMED,
+                    "truncated mid-pulse at offset %d: a $00 pulse needs three "
+                    "more bytes and only %d remain" % (i, n - i - 1))
+            pulses.append(Pulse(
+                body[i + 1] | (body[i + 2] << 8) | (body[i + 3] << 16),
+                False, i))
+            i += 4
+    if not pulses:
+        raise Refusal(EXIT_MALFORMED, "the TAP holds no pulses")
+    return pulses
+
+
+def total_cycles(pulses):
+    return sum(p.cycles for p in pulses)
+
+
+def seconds(cycles, header):
+    clock = CLOCKS.get((header.platform, header.video), 985248)
+    return cycles / float(clock)
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
