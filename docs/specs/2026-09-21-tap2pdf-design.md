@@ -186,6 +186,45 @@ it does not know.
   unreliable. A cracker wants to see a damaged block, not have it hidden.
 - **Zero pulses / empty data**: exit 4.
 
+## 11a. The verification report
+
+Most people who own a TAP did not make it. They downloaded it, and the question
+they actually have is *is this file any good* — before they waste an evening on
+a tape that was already broken when they got it.
+
+So the dossier opens with a verification report: a plain table of every check
+tap2pdf performed, its result, and — the part that makes it worth trusting —
+every check it **did not** perform and why.
+
+| Check | Result |
+|---|---|
+| TAP signature | PASS — `C64-TAPE-RAW`, version 1, C64, PAL |
+| Header length vs actual data | FAIL — header says 1,234,567 bytes, file holds 1,234,000 (367 short) |
+| Pulse stream integrity | PASS — 412,883 pulses, none truncated |
+| CBM block checksums | 6 of 7 PASS — block 4 `PART2` FAIL (expected `$3A`, computed `$7C`) |
+| First copy vs repeat | PASS — all 7 blocks agree |
+| Byte parity | PASS |
+| Turbo region integrity | NOT CHECKED — format unidentified, no checksum model available |
+| Loader identification | NOT CHECKED — run with `--tapclean` for a named loader |
+
+Followed by one plain-English verdict:
+
+> One CBM block is damaged (`PART2`). Everything else reads cleanly. The header
+> length field is wrong, which is cosmetic and repairable with `tapclean -rs`.
+
+Rules for this section:
+
+- **A check that was not run is never rendered as a pass.** Blank rows, omitted
+  rows and green-by-default are all forbidden. `NOT CHECKED` is a result, and it
+  carries its reason.
+- **The verdict never exceeds the evidence.** With the turbo region unchecked,
+  the verdict says the CBM portion reads cleanly — not that the tape is good.
+- The same table is the first thing in the `.nfo` render, since that is what
+  gets pasted into a forum reply when someone asks "is my tape broken".
+
+This section is why the tool exists for the many people who have TAP files and
+no way to judge them. It ranks above the cracking detail in document order.
+
 ## 12. CBM block decoding
 
 The ROM tape format, decoded properly rather than pattern-matched:
@@ -235,12 +274,14 @@ A4 so the PDF render is not an afterthought.
 Document order:
 
 1. Cover — tape name, platform, PAL/NTSC, total time, title screenshot
-2. Tape map
-3. Summary — loader(s), file count, health verdict
-4. File table — name, type, load, end, size, checksum
-5. Memory map
-6. Per-region detail — pulse clusters, block counts, timings
-7. Provenance — tap2pdf version, which enrichments were used and which were not
+2. **Verification report** (§11a) — what was checked, what passed, what was not
+   checked, and the plain-English verdict
+3. Tape map
+4. Summary — loader(s), file count
+5. File table — name, type, load, end, size, checksum
+6. Memory map
+7. Per-region detail — pulse clusters, block counts, timings
+8. Provenance — tap2pdf version, which enrichments were used and which were not
 
 **PDF:** the HTML rendered by headless Edge or Chrome, discovered in this order:
 `--browser` if given, then `EDGE`/`CHROME` on PATH, then the standard Windows
