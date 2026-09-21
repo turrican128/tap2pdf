@@ -433,6 +433,73 @@ def build_files(pairs):
     return files
 
 
+# ------------------------------------------------------------------ basic --
+# BASIC V2 tokens $80-$CB. $9E is SYS, and that anchor is what the entry-point
+# feature rests on: if this table shifts by one, every SYS address is wrong.
+_TOKEN_TEXT = (
+    "END FOR NEXT DATA INPUT# INPUT DIM READ LET GOTO RUN IF RESTORE GOSUB "
+    "RETURN REM STOP ON WAIT LOAD SAVE VERIFY DEF POKE PRINT# PRINT CONT LIST "
+    "CLR CMD SYS OPEN CLOSE GET NEW TAB( TO FN SPC( THEN NOT STEP + - * / ^ "
+    "AND OR > = < SGN INT ABS USR FRE POS SQR RND LOG EXP COS SIN TAN ATN "
+    "PEEK LEN STR$ VAL ASC CHR$ LEFT$ RIGHT$ MID$ GO"
+).split()
+BASIC_TOKENS = dict((0x80 + i, t) for i, t in enumerate(_TOKEN_TEXT))
+
+
+def detokenize(data, load=0x0801):
+    """Lines are [next-line pointer][line number][tokens][$00]; a next-line
+    pointer of $0000 ends the program."""
+    lines = []
+    i = 0
+    while i + 4 <= len(data):
+        nxt = data[i] | (data[i + 1] << 8)
+        if nxt == 0:
+            break
+        number = data[i + 2] | (data[i + 3] << 8)
+        i += 4
+        out = []
+        while i < len(data) and data[i]:
+            b = data[i]
+            out.append(BASIC_TOKENS.get(b, chr(b) if 32 <= b < 127 else "."))
+            i += 1
+        i += 1                                   # the line's terminating $00
+        lines.append((number, "".join(out)))
+    return lines
+
+
+def find_sys(lines):
+    for _number, text in lines:
+        at = text.find("SYS")
+        if at < 0:
+            continue
+        digits = ""
+        for ch in text[at + 3:]:
+            if ch.isdigit():
+                digits += ch
+            elif digits or ch != " ":
+                break
+        if digits:
+            return int(digits)
+    return None
+
+
+# ----------------------------------------------------------------- packer --
+# Every entry here was observed in a file crunched locally with the named
+# tool. Nothing in this table is written from memory: a packer table that
+# guesses makes the dossier lie, which is the one thing it must not do.
+# Re-derive with tools/derive_signatures.py.
+PACKER_SIGNATURES = []
+
+
+def identify_packer(data, load):
+    for sig in PACKER_SIGNATURES:
+        window = data[:sig["max_offset"] + len(sig["pattern"])]
+        at = window.find(sig["pattern"])
+        if at >= 0:
+            return {"name": sig["name"], "offset": at}
+    return None
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
