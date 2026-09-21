@@ -1,0 +1,12 @@
+# Tapes and PRGs are binary. A .tap is a raw pulse stream: if git ever
+# treated one as text, a 0D 0A byte pair inside it would be rewritten and
+# the fixture would silently decode differently on another machine.
+*.tap binary
+*.prg binary
+*.d64 binary
+*.pdf binary
+*.png binary
+
+# Everything else is text, stored and checked out as LF, so the golden
+# files compare byte-for-byte on every platform.
+* text=auto eol=lf
