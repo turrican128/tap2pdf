@@ -389,5 +389,11 @@ tap2pdf/
 - **1.0** — everything in this document.
 - **1.1** — the loader knowledge base as a data file: what each named loader
   does and where its checks sit, keyed on the TAPClean loader name.
+- **future idea, not committed** — native loader identification without
+  TAPClean. Run TAPClean over a large set of real tapes to get ground-truth
+  loader names, then test whether our pulse clusters fingerprint reliably per
+  loader. Only worth doing if the fingerprints hold up on data; the honesty
+  rule forbids shipping a guess. Recorded here so it is not lost - it is not
+  scheduled, and nothing is to be built from it without Alex's say-so.
 - **later** — `--batch` over a folder, producing one catalog document. Once the
   dossier model exists this is a renderer, not a new tool.
