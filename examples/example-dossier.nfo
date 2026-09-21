@@ -22,8 +22,9 @@ Loader identification          NOT CHECKED
     no loader names available: run with `--tapclean <report>` to identify
     them
 Cruncher identification        NOT CHECKED
-    no cruncher signatures are compiled into this build, so no check was
-    attempted
+    no match among the 1 compiled signature(s). This does not mean the files
+    are uncrunched - only that no cruncher this build knows about was
+    recognised.
 
 VERDICT
 -------

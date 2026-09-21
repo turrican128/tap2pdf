@@ -21,3 +21,21 @@ def test_a_signature_matches_only_inside_its_declared_window():
     sig = tap2pdf.PACKER_SIGNATURES[0]
     padding = b"\x00" * (sig["max_offset"] + 64)
     assert tap2pdf.identify_packer(padding + sig["pattern"], 0x0801) is None
+
+
+def test_the_exomizer_signature_matches_a_real_crunched_file():
+    # tests/fixtures/exomizer_sfx_sample.prg is OUR payload, crunched with a
+    # local exomizer. Committing it keeps the signature tested forever
+    # without needing exomizer installed in CI.
+    from conftest import FIXTURES
+    data = (FIXTURES / "exomizer_sfx_sample.prg").read_bytes()
+    found = tap2pdf.identify_packer(data[2:], 0x0801)   # skip the load address
+    assert found is not None, "the shipped Exomizer signature does not match"
+    assert "Exomizer" in found["name"]
+    assert found["offset"] == 0
+
+
+def test_the_exomizer_signature_does_not_match_an_uncrunched_file():
+    from conftest import FIXTURES
+    data = (FIXTURES / "clean_single.tap").read_bytes()
+    assert tap2pdf.identify_packer(data, 0x0801) is None

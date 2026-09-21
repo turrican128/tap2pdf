@@ -31,9 +31,15 @@ recovered.
 - `--pdf` uses headless Edge or Chrome. If one is not found the HTML is still
   written and the tool exits 6 saying why. A browser named with `--browser` is
   used or nothing is — it will not quietly render with a different one.
-- No cruncher signature is written from memory. The table ships empty and
-  entries may only be added after being observed in a file crunched locally; a
-  test enforces that each one names its sample.
+- No cruncher signature is written from memory, and none is added until it has
+  been shown to be *stable*. The first Exomizer signature derived looked fine
+  and was worthless: taken from one sample, it carried address operands that
+  move with the crunched file's size, so it would have matched that single file
+  and nothing else — the tool would have appeared to support Exomizer while
+  silently finding none. The signature that ships is the bytes that stayed
+  identical across four genuinely different crunched files, and a committed
+  sample keeps it tested. When nothing matches, the dossier says no known
+  cruncher was recognised — never that the file is uncrunched.
 - `tools/qa_sweep.py` runs the tool over a folder of real tapes, where a refusal
   is a pass and only a crash is a failure. Real tapes cannot live in this repo,
   so this is how they get exercised.

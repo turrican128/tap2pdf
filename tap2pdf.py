@@ -5,8 +5,11 @@ Standard library only. The binary people download bundles nothing else, so
 nothing else may be imported here.
 """
 import argparse
+import html as _html
 import os
+import shutil
 import struct
+import subprocess
 import sys
 from dataclasses import dataclass, field
 
@@ -492,7 +495,24 @@ def find_sys(lines):
 # tool. Nothing in this table is written from memory: a packer table that
 # guesses makes the dossier lie, which is the one thing it must not do.
 # Re-derive with tools/derive_signatures.py.
-PACKER_SIGNATURES = []
+#
+# A signature must also be STABLE. The first derivation of the Exomizer
+# entry below looked fine and was worthless: taken from a single sample, it
+# included the address operands `$0962` and `$0914`, which move with the
+# crunched file's size. It would have matched that one file and nothing
+# else - the tool would have appeared to support Exomizer while silently
+# finding none. The bytes kept here are the ones that stayed identical
+# across four genuinely different crunched files.
+PACKER_SIGNATURES = [
+    {"name": "Exomizer 3.x (sfx sys)",
+     # The SFX BASIC stub (10 SYS 2061) plus the first two bytes of the
+     # decruncher. Byte 14 onward is an address operand and varies.
+     "pattern": bytes.fromhex("0b0837019e32303631000000babd"),
+     "max_offset": 4,
+     "source": "exomizer 3.x sfx sys, win32 build; bytes identical across 4 "
+               "crunched samples of differing size, derived with "
+               "tools/derive_signatures.py"},
+]
 
 
 def identify_packer(data, load):
@@ -621,6 +641,28 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None):
             "Cruncher identification", NOT_CHECKED,
             "no cruncher signatures are compiled into this build, so no "
             "check was attempted"))
+    elif not files:
+        checks.append(Check(
+            "Cruncher identification", NOT_CHECKED,
+            "no files were recovered, so there was nothing to check against "
+            "the %d compiled signature(s)" % len(PACKER_SIGNATURES)))
+    else:
+        matched = []
+        for f in files:
+            found = identify_packer(f.data, f.load)
+            if found:
+                matched.append("%s: %s" % (f.name, found["name"]))
+        if matched:
+            checks.append(Check("Cruncher identification", PASS,
+                                "; ".join(matched)))
+        else:
+            # NOT "unpacked". Only that nothing we can recognise was found.
+            checks.append(Check(
+                "Cruncher identification", NOT_CHECKED,
+                "no match among the %d compiled signature(s). This does not "
+                "mean the files are uncrunched - only that no cruncher this "
+                "build knows about was recognised."
+                % len(PACKER_SIGNATURES)))
 
     return checks
 
@@ -837,7 +879,6 @@ table{page-break-inside:avoid}figure{page-break-inside:avoid}}
 
 
 def _h(text):
-    import html as _html
     return _html.escape(str(text), quote=True)
 
 
@@ -1004,9 +1045,6 @@ def extract_files(d, directory):
 # ----------------------------------------------------------------- enrich --
 # Optional. Every failure here is reported and never faked, and the HTML is
 # always written first so a failed enrichment cannot cost you the dossier.
-import shutil            # noqa: E402 - kept beside its only users
-import subprocess        # noqa: E402
-
 BROWSER_CANDIDATES = [
     "msedge", "chrome", "chromium", "google-chrome", "chromium-browser",
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",

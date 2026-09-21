@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    name: test ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.12"]
+        exclude:
+          # 3.9 is the floor we promise; testing it on one OS is enough.
+          - os: windows-latest
+            python: "3.9"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: install pytest
+        run: python -m pip install --quiet pytest
+
+      - name: run tests
+        run: python -m pytest tests/ -q
+
+      - name: the tool must run with no packages installed at all
+        # The release binaries bundle nothing but the stdlib, so a
+        # stdlib-only run is the thing that actually has to work. pytest is a
+        # test-time dependency, not a runtime one, and this step proves it.
+        # shell: bash everywhere -- the default on Windows runners is
+        # PowerShell, which does not understand a backslash continuation.
+        shell: bash
+        run: |
+          python tap2pdf.py --version
+          python tap2pdf.py tests/fixtures/two_files.tap \
+            -o "$RUNNER_TEMP/smoke.html" --nfo --extract "$RUNNER_TEMP/out"
+          test -s "$RUNNER_TEMP/smoke.html"
+          test -s "$RUNNER_TEMP/smoke.nfo"
+
+      - name: a malformed tape is refused, not analysed
+        # Exit 4 is a documented promise. A tape truncated mid-pulse must
+        # never produce a document that looks complete.
+        shell: bash
+        run: |
+          set +e
+          python tap2pdf.py tests/fixtures/truncated.tap -o "$RUNNER_TEMP/x.html"
+          code=$?
+          set -e
+          [ $code -eq 4 ] || { echo "::error::truncated tape should exit 4, got $code"; exit 1; }
+
+  fixtures:
+    name: committed fixtures are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: regenerate the fixtures and diff them against the committed copies
+        # A committed binary drifts silently. If the synthesiser changes and
+        # nobody rebuilds, the tests keep passing against tapes that no
+        # longer match the encoder they document.
+        run: |
+          mkdir -p /tmp/committed
+          cp tests/fixtures/*.tap /tmp/committed/
+          python tools/make_fixtures.py
+          for f in /tmp/committed/*.tap; do
+            cmp "$f" "tests/fixtures/$(basename "$f")" \
+              || { echo "::error::fixtures are stale -- run tools/make_fixtures.py"; exit 1; }
+          done
+          echo "fixtures verified"
+
+  examples:
+    name: shipped example is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: rebuild examples/ and diff it against the committed copy
+        # examples/example-dossier.html is the first thing anyone looks at.
+        # If the renderer changes and it is not rebuilt, the tool's shop
+        # window stops matching the tool.
+        run: |
+          mkdir -p /tmp/ex
+          cp examples/* /tmp/ex/
+          python tools/make_examples.py
+          for f in /tmp/ex/*; do
+            cmp "$f" "examples/$(basename "$f")" \
+              || { echo "::error::examples/ is stale -- run tools/make_examples.py"; exit 1; }
+          done
+          echo "examples verified"

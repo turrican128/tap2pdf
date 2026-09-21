@@ -114,7 +114,7 @@ Being straight about this is the point of the tool, so it is in the README too:
 
 - **Turbo loader data is not verified.** tap2pdf reads the CBM ROM-loader portion of a tape properly — checksums, parity, both recorded copies. For turbo data it can tell you the pulse clusters, block count and timing, but there is no checksum model for a format it has not identified.
 - **Loaders are not named without help.** Pass `--tapclean <report>` to get names from [TAPClean](https://github.com/Chesterbr/tapclean), which knows 130+ of them. Without it, regions are described by their pulse signature.
-- **Crunchers are only reported when a signature is compiled in**, and signatures are only added after being observed in a file crunched locally. None are written from memory.
+- **Crunchers are only reported when a signature is compiled in.** 1.0 ships one, for Exomizer 3.x `sfx sys`. Signatures are never written from memory: each is derived from a file crunched locally, and kept only if it stays identical across several differently-sized samples. When nothing matches, the dossier says no known cruncher was recognised — **not** that the file is uncrunched.
 - **It is not TAPClean.** TAPClean tests, cleans and repairs tapes. tap2pdf explains one. Use both.
 
 ## Command line

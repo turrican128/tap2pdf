@@ -1,0 +1,150 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            binary: tap2pdf
+            strip: "--strip"
+          - os: windows-latest
+            target: windows
+            binary: tap2pdf.exe
+            strip: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Oldest runner-supported Python we can get, for the widest glibc
+          # compatibility on the Linux build.
+          python-version: "3.11"
+
+      - name: install pyinstaller
+        run: python -m pip install --quiet pyinstaller pytest
+
+      - name: tests must pass before anything is built
+        run: python -m pytest tests/ -q
+
+      - name: build single-file binary
+        # tap2pdf imports argparse, html, os, shutil, struct, subprocess, sys
+        # and dataclasses. Nothing else. Excluding the modules we provably
+        # never import keeps the binary small.
+        #
+        # --strip on Linux ONLY (see matrix.strip). On Windows it corrupts
+        # the bundled Python DLL: the binary builds cleanly and then dies
+        # with "Failed to load Python DLL", which is how a txt2dirart
+        # release candidate once failed. On Linux it is most of the binary.
+        #
+        # NOTE vs txt2dirart: subprocess, shutil and html must NOT be
+        # excluded here. tap2pdf uses all three -- subprocess and shutil for
+        # the PDF render, html for escaping -- and excluding them produces a
+        # binary that builds fine and dies at startup.
+        #
+        # An over-aggressive exclude list is exactly why the smoke test
+        # below is not optional.
+        run: >
+          pyinstaller --onefile --name tap2pdf
+          --console --noupx ${{ matrix.strip }}
+          --exclude-module tkinter --exclude-module unittest
+          --exclude-module pydoc --exclude-module doctest
+          --exclude-module pdb --exclude-module sqlite3
+          --exclude-module xmlrpc --exclude-module asyncio
+          --exclude-module multiprocessing --exclude-module email
+          --exclude-module http --exclude-module decimal
+          --exclude-module csv --exclude-module calendar
+          tap2pdf.py
+
+      - name: the binary must actually run
+        # A PyInstaller build can succeed and still produce something that
+        # cannot start. Exercise the real paths: version, a full dossier,
+        # the NFO, extraction, and a refusal with its exit code.
+        shell: bash
+        run: |
+          BIN="dist/${{ matrix.binary }}"
+          "$BIN" --version
+          "$BIN" tests/fixtures/two_files.tap -o smoke.html --nfo --extract smoke-out
+          test -s smoke.html
+          test -s smoke.nfo
+          test -s smoke-out/01_PART_ONE.prg
+          grep -q "NOT CHECKED" smoke.nfo \
+            || { echo "::error::the verification report lost its NOT CHECKED rows"; exit 1; }
+          set +e
+          "$BIN" tests/fixtures/truncated.tap -o bad.html
+          code=$?
+          set -e
+          [ $code -eq 4 ] || { echo "::error::truncated tape should exit 4, got $code"; exit 1; }
+          echo "binary smoke test passed"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tap2pdf-${{ matrix.target }}
+          path: dist/${{ matrix.binary }}
+          if-no-files-found: error
+
+  package:
+    name: package and publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: assemble the zip
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          DIR="tap2pdf-${VERSION}"
+          mkdir -p "$DIR/examples" "$DIR/tools"
+          cp artifacts/tap2pdf-windows/tap2pdf.exe "$DIR/"
+          cp artifacts/tap2pdf-linux/tap2pdf       "$DIR/"
+          chmod +x "$DIR/tap2pdf"
+          cp tap2pdf.py README.md CHANGELOG.md LICENSE "$DIR/"
+          # The example tape AND the dossier it produces: someone should be
+          # able to see the output before pointing the tool at their own tape.
+          cp examples/* "$DIR/examples/"
+          # The sweep is how anyone checks a whole archive, and it is useless
+          # if it is only in the repo.
+          cp tools/qa_sweep.py "$DIR/tools/"
+          zip -r -q "${DIR}.zip" "$DIR"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "ZIP=${DIR}.zip"   >> "$GITHUB_ENV"
+          unzip -l "${DIR}.zip"
+          # A file the zip is supposed to carry going missing must fail the
+          # build, not be noticed later by eye.
+          required="tap2pdf tap2pdf.exe tap2pdf.py README.md CHANGELOG.md LICENSE"
+          required="$required examples/example.tap examples/example-dossier.html"
+          required="$required examples/example-dossier.nfo tools/qa_sweep.py"
+          listing=$(unzip -Z1 "${DIR}.zip")
+          for f in $required; do
+            echo "$listing" | grep -qxF "${DIR}/${f}" \
+              || { echo "::error::missing from the zip: $f"; exit 1; }
+          done
+          echo "zip contents verified"
+
+      - name: publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: tap2pdf ${{ env.VERSION }}
+          body_path: CHANGELOG.md
+          # A tag with a suffix (v1.0-rc1) is a trial run, not a release.
+          # Without this it publishes as the repo's latest release and anyone
+          # landing on the page downloads a release candidate.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ${{ env.ZIP }}
