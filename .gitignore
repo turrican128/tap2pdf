@@ -1,0 +1,17 @@
+# Real game tapes never enter this repo. They are copyrighted, and a public
+# GitHub repo is not an archive. Synthetic test fixtures live in
+# tests/fixtures/ and are explicitly re-included below.
+*.tap
+*.t64
+*.d64
+*.prg
+!tests/fixtures/*.tap
+!tests/fixtures/*.prg
+!examples/*.tap
+
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+dist/
+*.spec
