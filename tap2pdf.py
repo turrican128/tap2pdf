@@ -250,6 +250,189 @@ def segment(pulses):
     return regions
 
 
+# -------------------------------------------------------------------- cbm --
+FILE_TYPES = {1: "relocatable PRG", 2: "SEQ data", 3: "non-relocatable PRG",
+              4: "SEQ header", 5: "end of tape"}
+HEADER_PAYLOAD = 192
+
+
+@dataclass
+class CbmBlock:
+    countdown: int
+    payload: bytes
+    checksum_stored: int
+    checksum_computed: int
+    parity_errors: int
+    start_index: int
+    end_index: int
+
+    @property
+    def checksum_ok(self):
+        return self.checksum_stored == self.checksum_computed
+
+
+@dataclass
+class CbmFile:
+    name: str
+    ftype: int
+    load: int
+    end: int
+    data: bytes
+    header_block: CbmBlock
+    data_block: CbmBlock
+    copies_agree: bool
+    disagreement_count: int
+
+    @property
+    def size(self):
+        return len(self.data)
+
+    @property
+    def type_name(self):
+        return FILE_TYPES.get(self.ftype, "unknown type %d" % self.ftype)
+
+
+def _symbol(pulse):
+    v = pulse.cycles // 8
+    for sym, want in (("S", CBM_SHORT), ("M", CBM_MEDIUM), ("L", CBM_LONG)):
+        if abs(v - want) <= CBM_TOLERANCE:
+            return sym
+    return None
+
+
+def petscii_to_ascii(raw):
+    out = []
+    for b in raw:
+        out.append(chr(b) if 32 <= b < 127 else ".")
+    return "".join(out).rstrip(". ").rstrip()
+
+
+def _read_byte(syms, i):
+    """(value, parity_ok, next_i), or (None, None, i) if no byte starts here.
+
+    New-data marker L+M, then 8 bits LSB first, then an odd parity bit.
+    A bit is S+M for 0 and M+S for 1.
+    """
+    if i + 1 >= len(syms) or syms[i] != "L" or syms[i + 1] != "M":
+        return None, None, i
+    i += 2
+    value = 0
+    ones = 0
+    for bit_index in range(9):                   # 8 data bits, then parity
+        if i + 1 >= len(syms):
+            return None, None, i
+        a, b = syms[i], syms[i + 1]
+        if a == "S" and b == "M":
+            bit = 0
+        elif a == "M" and b == "S":
+            bit = 1
+        else:
+            return None, None, i
+        i += 2
+        if bit_index < 8:
+            value |= bit << bit_index
+        ones += bit
+    return value, (ones % 2 == 1), i
+
+
+def decode_cbm_blocks(pulses):
+    syms = [_symbol(p) for p in pulses]
+    blocks = []
+    i = 0
+    n = len(syms)
+    while i < n:
+        value, _parity_ok, nxt = _read_byte(syms, i)
+        if value is None:
+            i += 1
+            continue
+        if value not in (0x89, 0x09):            # only a countdown starts one
+            i = nxt
+            continue
+        start = i
+        countdown = value
+        i = nxt
+        expect = value - 1
+        floor = 0x81 if countdown == 0x89 else 0x01
+        while expect >= floor:
+            v, _ok, nxt = _read_byte(syms, i)
+            if v != expect:
+                break
+            i = nxt
+            expect -= 1
+        payload = bytearray()
+        parity_errors = 0
+        while True:
+            v, ok, nxt = _read_byte(syms, i)
+            if v is None:
+                break
+            payload.append(v)
+            if not ok:
+                # A damaged byte is kept, not dropped: a cracker wants to
+                # see it.
+                parity_errors += 1
+            i = nxt
+            if i + 1 < n and syms[i] == "L" and syms[i + 1] == "S":
+                i += 2                           # end-of-data marker
+                break
+        if not payload:
+            continue
+        stored = payload[-1]
+        body = bytes(payload[:-1])
+        computed = 0
+        for b in body:
+            computed ^= b
+        blocks.append(CbmBlock(countdown, body, stored, computed,
+                               parity_errors, start, i))
+    return blocks
+
+
+def pair_blocks(blocks):
+    """Pair each $89 block with the $09 repeat that follows it."""
+    pairs = []
+    i = 0
+    while i < len(blocks):
+        first = blocks[i]
+        repeat = None
+        if i + 1 < len(blocks) and blocks[i + 1].countdown == 0x09:
+            repeat = blocks[i + 1]
+            i += 2
+        else:
+            i += 1
+        pairs.append((first, repeat))
+    return pairs
+
+
+def _disagreements(a, b):
+    if b is None:
+        return 0
+    n = max(len(a.payload), len(b.payload))
+    pa = a.payload.ljust(n, b"\x00")
+    pb = b.payload.ljust(n, b"\x00")
+    return sum(1 for x, y in zip(pa, pb) if x != y)
+
+
+def build_files(pairs):
+    files = []
+    i = 0
+    while i + 1 < len(pairs):
+        hdr_first, hdr_repeat = pairs[i]
+        if len(hdr_first.payload) < HEADER_PAYLOAD:
+            i += 1
+            continue
+        p = hdr_first.payload
+        ftype = p[0]
+        load = p[1] | (p[2] << 8)
+        end = p[3] | (p[4] << 8)
+        name = petscii_to_ascii(p[5:21])
+        data_first, data_repeat = pairs[i + 1]
+        disagree = (_disagreements(hdr_first, hdr_repeat)
+                    + _disagreements(data_first, data_repeat))
+        files.append(CbmFile(name, ftype, load, end, data_first.payload,
+                             hdr_first, data_first, disagree == 0, disagree))
+        i += 2
+    return files
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
