@@ -6,7 +6,9 @@ nothing else may be imported here.
 """
 import argparse
 import os
+import struct
 import sys
+from dataclasses import dataclass, field
 
 __version__ = "0.1.0-dev"
 
@@ -26,6 +28,49 @@ class Refusal(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+# ---------------------------------------------------------------- tapfile --
+SIGNATURES = {b"C64-TAPE-RAW": "C64", b"C16-TAPE-RAW": "C16"}
+PLATFORMS = {0: "C64", 1: "VIC20", 2: "C16"}
+VIDEO = {0: "PAL", 1: "NTSC"}
+
+CLOCKS = {
+    ("C64", "PAL"): 985248, ("C64", "NTSC"): 1022727,
+    ("C16", "PAL"): 886724, ("C16", "NTSC"): 894886,
+    ("VIC20", "PAL"): 1108405, ("VIC20", "NTSC"): 1022727,
+}
+
+HEADER_SIZE = 20
+
+
+@dataclass
+class TapHeader:
+    signature: bytes
+    version: int
+    platform: str
+    video: str
+    declared_length: int
+    actual_length: int
+    length_mismatch: int
+
+
+def parse_header(data):
+    if len(data) < HEADER_SIZE:
+        raise Refusal(EXIT_NOT_TAP,
+                      "too short to be a TAP file (%d bytes)" % len(data))
+    sig = data[:12]
+    if sig not in SIGNATURES:
+        raise Refusal(EXIT_NOT_TAP, "not a TAP file: signature is %r" % sig)
+    version = data[12]
+    if version not in (0, 1):
+        raise Refusal(EXIT_MALFORMED, "unknown TAP version %d" % version)
+    platform = PLATFORMS.get(data[13], SIGNATURES[sig])
+    video = VIDEO.get(data[14], "PAL")
+    declared = struct.unpack("<I", data[16:20])[0]
+    actual = len(data) - HEADER_SIZE
+    return TapHeader(sig, version, platform, video, declared, actual,
+                     actual - declared)
 
 
 # -------------------------------------------------------------------- cli --
