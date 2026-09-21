@@ -520,7 +520,7 @@ class Check:
     detail: str
 
 
-def build_checks(header, pulses, regions, files, tapclean_used):
+def build_checks(header, pulses, regions, files, tapclean_used, loaders=None):
     checks = []
 
     checks.append(Check(
@@ -603,12 +603,18 @@ def build_checks(header, pulses, regions, files, tapclean_used):
             "recognises and were not analysed further."
             % (len(unclassified), sum(r.pulse_count for r in unclassified))))
 
-    checks.append(Check(
-        "Loader identification",
-        PASS if tapclean_used else NOT_CHECKED,
-        "identified from the supplied TAPClean report" if tapclean_used
-        else "no loader names available: run with `--tapclean <report>` to "
-             "identify them"))
+    if tapclean_used:
+        named = ", ".join(loaders) if loaders else ""
+        checks.append(Check(
+            "Loader identification", PASS,
+            ("identified from the supplied TAPClean report: " + named)
+            if named
+            else "the supplied TAPClean report names no loader"))
+    else:
+        checks.append(Check(
+            "Loader identification", NOT_CHECKED,
+            "no loader names available: run with `--tapclean <report>` to "
+            "identify them"))
 
     if not PACKER_SIGNATURES:
         checks.append(Check(
@@ -757,6 +763,7 @@ class Dossier:
     verdict_text: str
     sys_entry: object
     packers: dict
+    loaders: list
     duration: float
     pulse_count: int
     enrichments: dict
@@ -780,13 +787,18 @@ def analyse(data, args):
         found = identify_packer(f.data, f.load)
         if found:
             packers[f.name] = found
+    report_path = getattr(args, "tapclean", None)
+    loaders = []
+    if report_path:
+        loaders = read_tapclean_report(report_path)["loaders"]
     checks = build_checks(header, pulses, regions, files,
-                          tapclean_used=bool(getattr(args, "tapclean", None)))
+                          tapclean_used=bool(report_path), loaders=loaders)
     return Dossier(
         title=getattr(args, "title", None) or os.path.basename(args.tape),
         header=header, regions=regions, files=files, checks=checks,
         verdict_text=verdict(checks, regions), sys_entry=sys_entry,
         packers=packers,
+        loaders=loaders,
         duration=seconds(total_cycles(pulses), header),
         pulse_count=len(pulses),
         enrichments={
@@ -989,6 +1001,100 @@ def extract_files(d, directory):
     return written
 
 
+# ----------------------------------------------------------------- enrich --
+# Optional. Every failure here is reported and never faked, and the HTML is
+# always written first so a failed enrichment cannot cost you the dossier.
+import shutil            # noqa: E402 - kept beside its only users
+import subprocess        # noqa: E402
+
+BROWSER_CANDIDATES = [
+    "msedge", "chrome", "chromium", "google-chrome", "chromium-browser",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+]
+
+
+def parse_tapclean_report(text):
+    """Tolerant of format drift: it scans for loader names and never raises
+    on a line it does not understand."""
+    loaders = []
+    lines = []
+    for raw in str(text).splitlines():
+        lines.append(raw)
+        low = raw.lower()
+        for marker in ("loader detected:", "loader:"):
+            if marker in low:
+                name = raw[low.index(marker) + len(marker):].strip()
+                if name and name not in loaders:
+                    loaders.append(name)
+                break
+    return {"loaders": loaders, "raw_lines": lines}
+
+
+def read_tapclean_report(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return parse_tapclean_report(fh.read())
+    except OSError as exc:
+        raise Refusal(EXIT_ENRICH,
+                      "cannot read the TAPClean report %s: %s" % (path, exc))
+
+
+def find_browser(explicit=None):
+    """An explicitly named browser is used or nothing is.
+
+    Falling back to some other browser when --browser names one that is not
+    there would render the PDF with a program the user did not ask for and
+    say nothing about it.
+    """
+    if explicit:
+        return shutil.which(explicit) or (explicit
+                                          if os.path.isfile(explicit)
+                                          else None)
+    for c in BROWSER_CANDIDATES:
+        found = shutil.which(c)
+        if found:
+            return found
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def render_pdf(html_path, pdf_path, browser=None):
+    exe = find_browser(browser)
+    if not exe:
+        raise Refusal(
+            EXIT_ENRICH,
+            ("--browser %s was not found, and tap2pdf will not silently use "
+             "a different one. The HTML dossier was still written." % browser)
+            if browser else
+            "no headless Edge or Chrome found for --pdf. The HTML dossier "
+            "was still written. Pass --browser <path>.")
+    url = "file:///" + os.path.abspath(html_path).replace("\\", "/")
+    try:
+        subprocess.run([exe, "--headless=new", "--disable-gpu",
+                        "--no-pdf-header-footer",
+                        "--print-to-pdf=" + os.path.abspath(pdf_path), url],
+                       check=True, capture_output=True, timeout=180)
+    except Exception as exc:
+        raise Refusal(EXIT_ENRICH,
+                      "the browser failed to render the PDF: %s. The HTML "
+                      "dossier was still written." % exc)
+    if not os.path.isfile(pdf_path) or os.path.getsize(pdf_path) == 0:
+        raise Refusal(EXIT_ENRICH,
+                      "the browser produced no PDF. The HTML dossier was "
+                      "still written.")
+
+
+def capture_screenshot(vice_path, tap_path):
+    """Not wired in v1.0. Its absence is reported in the dossier's
+    provenance block rather than quietly producing a document with no
+    cover image and no explanation."""
+    return None
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
@@ -1075,6 +1181,17 @@ def main(argv=None):
             if not args.quiet:
                 sys.stderr.write("extracted %d file(s) to %s\n"
                                  % (len(written), args.extract))
+
+        if args.pdf or args.pdf_only:
+            pdf_path = os.path.splitext(html_path)[0] + ".pdf"
+            render_pdf(html_path, pdf_path, args.browser)
+            if not args.quiet:
+                sys.stderr.write("wrote %s\n" % pdf_path)
+            if args.pdf_only:
+                try:
+                    os.remove(html_path)
+                except OSError:
+                    pass
 
         for check in dossier.checks:
             if check.result == FAIL and not args.quiet:
