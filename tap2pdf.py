@@ -637,6 +637,111 @@ def verdict(checks, regions):
     return " ".join(parts)
 
 
+# ---------------------------------------------------------------- tapemap --
+REGION_COLORS = {
+    "leader": "#5b7fa6", "cbm": "#3f8f5c", "turbo": "#c07a2c",
+    "gap": "#40454d", "unclassified": "#8a3b3b",
+}
+REGION_LABELS = {
+    "leader": "leader", "cbm": "CBM ROM loader", "turbo": "turbo",
+    "gap": "gap", "unclassified": "unclassified",
+}
+
+
+def svg_escape(text):
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def tape_map_svg(regions, header, width=880, height=124):
+    """Bands proportional to TIME, not pulse count: a gap of few long pulses
+    occupies real seconds on the tape and must look like it."""
+    total = sum(r.cycles for r in regions) or 1
+    bar_y, bar_h = 30, 46
+    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" '
+             'width="100%%" role="img" aria-label="tape map">'
+             % (width, height)]
+    x = 0.0
+    for r in regions:
+        w = max(1.0, width * (r.cycles / float(total)))
+        parts.append(
+            '<rect x="%.2f" y="%d" width="%.2f" height="%d" fill="%s">'
+            '<title>%s - %d pulses, %.2f s</title></rect>'
+            % (x, bar_y, w, bar_h, REGION_COLORS.get(r.kind, "#8a3b3b"),
+               svg_escape(REGION_LABELS.get(r.kind, r.kind)), r.pulse_count,
+               seconds(r.cycles, header)))
+        x += w
+    duration = seconds(total, header)
+    for i in range(6):
+        tx = width * i / 5.0
+        parts.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" '
+                     'stroke="#aab" stroke-width="1"/>'
+                     % (tx, bar_y + bar_h, tx, bar_y + bar_h + 5))
+        parts.append('<text x="%.1f" y="%d" font-size="11" fill="#6a7078" '
+                     'text-anchor="%s">%.1fs</text>'
+                     % (min(width - 2, max(2, tx)), bar_y + bar_h + 18,
+                        "start" if i == 0 else
+                        ("end" if i == 5 else "middle"),
+                        duration * i / 5.0))
+    seen = []
+    for r in regions:
+        if r.kind not in seen:
+            seen.append(r.kind)
+    lx = 0
+    for kind in seen:
+        label = REGION_LABELS.get(kind, kind)
+        parts.append('<rect x="%d" y="6" width="10" height="10" fill="%s"/>'
+                     % (lx, REGION_COLORS.get(kind, "#8a3b3b")))
+        parts.append('<text x="%d" y="15" font-size="11" fill="#3a4048">%s'
+                     '</text>' % (lx + 14, svg_escape(label)))
+        lx += 26 + 7 * len(label)
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+# ----------------------------------------------------------------- memmap --
+def memory_map_svg(files, width=880, height=176):
+    bar_y, bar_h = 62, 40
+    scale = width / 65536.0
+    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" '
+             'width="100%%" role="img" aria-label="memory map">'
+             % (width, height)]
+    for start, end, label in ((0xA000, 0xC000, "BASIC"),
+                              (0xD000, 0xE000, "I/O"),
+                              (0xE000, 0x10000, "KERNAL")):
+        parts.append('<rect x="%.2f" y="%d" width="%.2f" height="%d" '
+                     'fill="#e8eaed"/>'
+                     % (start * scale, bar_y, (end - start) * scale, bar_h))
+        parts.append('<text x="%.2f" y="%d" font-size="10" fill="#9aa0a6">%s'
+                     '</text>' % (start * scale + 3, bar_y + bar_h - 5, label))
+    parts.append('<rect x="0" y="%d" width="%d" height="%d" fill="none" '
+                 'stroke="#c8ccd2"/>' % (bar_y, width, bar_h))
+    for i, f in enumerate(files):
+        x = f.load * scale
+        w = max(2.0, (f.end - f.load) * scale)
+        row = i % 2
+        parts.append('<rect x="%.2f" y="%d" width="%.2f" height="%d" '
+                     'fill="#3f8f5c" fill-opacity="0.85">'
+                     '<title>%s</title></rect>'
+                     % (x, bar_y, w, bar_h, svg_escape(f.name)))
+        label_y = bar_y - 8 - row * 16
+        parts.append('<line x1="%.2f" y1="%d" x2="%.2f" y2="%d" '
+                     'stroke="#9aa0a6" stroke-width="1"/>'
+                     % (x, label_y + 3, x, bar_y))
+        parts.append('<text x="%.2f" y="%d" font-size="11" fill="#1b1d20">'
+                     '%s $%04X</text>'
+                     % (x + 3, label_y, svg_escape(f.name), f.load))
+    for addr in (0x0000, 0x4000, 0x8000, 0xC000, 0xFFFF):
+        tx = addr * scale
+        parts.append('<text x="%.1f" y="%d" font-size="11" fill="#6a7078" '
+                     'text-anchor="%s">$%04X</text>'
+                     % (min(width - 2, max(2, tx)), bar_y + bar_h + 18,
+                        "start" if addr == 0 else
+                        ("end" if addr == 0xFFFF else "middle"), addr))
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
