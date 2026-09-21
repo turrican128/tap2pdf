@@ -9,6 +9,10 @@
 !tests/fixtures/*.prg
 !examples/*.tap
 
+# QA sweep results reference local tapes by name; they stay local too.
+qa-baseline*.json
+qa-*.json
+
 __pycache__/
 *.pyc
 .pytest_cache/
