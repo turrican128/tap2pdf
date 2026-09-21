@@ -245,8 +245,12 @@ def segment(pulses):
         else:
             regions.append(Region(kind, start, end, len(window), cycles))
     for r in regions:
+        # A lower threshold for what gets REPORTED than for what gets
+        # decided: the CBM long pulse occurs once per byte, about 5%, and
+        # at the decision threshold it vanishes from the dossier - leaving
+        # a ROM region that appears to have only two pulse widths.
         r.clusters = find_clusters(
-            histogram(pulses[r.start_index:r.end_index]), min_share=0.05)
+            histogram(pulses[r.start_index:r.end_index]), min_share=0.02)
     return regions
 
 
@@ -742,6 +746,172 @@ def memory_map_svg(files, width=880, height=176):
     return "".join(parts)
 
 
+# ----------------------------------------------------------------- report --
+@dataclass
+class Dossier:
+    title: str
+    header: TapHeader
+    regions: list
+    files: list
+    checks: list
+    verdict_text: str
+    sys_entry: object
+    packers: dict
+    duration: float
+    pulse_count: int
+    enrichments: dict
+    screenshot_data_uri: object = None
+
+
+def analyse(data, args):
+    header = parse_header(data)
+    if getattr(args, "pal", False):
+        header.video = "PAL"
+    elif getattr(args, "ntsc", False):
+        header.video = "NTSC"
+    pulses = decode_pulses(data, header)
+    regions = segment(pulses)
+    files = build_files(pair_blocks(decode_cbm_blocks(pulses)))
+    sys_entry = None
+    packers = {}
+    for f in files:
+        if f.load == 0x0801 and sys_entry is None:
+            sys_entry = find_sys(detokenize(f.data))
+        found = identify_packer(f.data, f.load)
+        if found:
+            packers[f.name] = found
+    checks = build_checks(header, pulses, regions, files,
+                          tapclean_used=bool(getattr(args, "tapclean", None)))
+    return Dossier(
+        title=getattr(args, "title", None) or os.path.basename(args.tape),
+        header=header, regions=regions, files=files, checks=checks,
+        verdict_text=verdict(checks, regions), sys_entry=sys_entry,
+        packers=packers,
+        duration=seconds(total_cycles(pulses), header),
+        pulse_count=len(pulses),
+        enrichments={
+            "TAPClean report": bool(getattr(args, "tapclean", None)),
+            "VICE screenshot": bool(getattr(args, "vice", None)),
+        })
+
+
+CSS = """
+:root{--ink:#1b1d20;--muted:#6a7078;--rule:#d8dce1;--bg:#fff;--panel:#f6f7f9;
+--pass:#2f7d4f;--fail:#a52f2f;--unchecked:#8a6d1f}
+*{box-sizing:border-box}
+body{margin:0;padding:32px;background:var(--bg);color:var(--ink);
+font:15px/1.55 "Helvetica Neue",Arial,sans-serif;max-width:960px}
+h1{font-size:28px;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:17px;margin:34px 0 10px;padding-bottom:6px;
+border-bottom:1px solid var(--rule)}
+.sub{color:var(--muted);margin:0 0 18px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);
+vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;
+letter-spacing:.04em}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.PASS{color:var(--pass);font-weight:600;white-space:nowrap}
+.FAIL{color:var(--fail);font-weight:600;white-space:nowrap}
+.NOTCHECKED{color:var(--unchecked);font-weight:600;white-space:nowrap}
+.verdict{background:var(--panel);border-left:3px solid var(--muted);
+padding:12px 14px;margin:14px 0}
+.prov{color:var(--muted);font-size:13px}
+figure{margin:0}
+@media print{body{padding:0;max-width:none}h2{page-break-after:avoid}
+table{page-break-inside:avoid}figure{page-break-inside:avoid}}
+@page{size:A4;margin:16mm}
+"""
+
+
+def _h(text):
+    import html as _html
+    return _html.escape(str(text), quote=True)
+
+
+def render_html(d):
+    check_rows = []
+    for c in d.checks:
+        check_rows.append(
+            '<tr><td>%s</td><td class="%s">%s</td><td>%s</td></tr>'
+            % (_h(c.name), c.result.replace(" ", ""), _h(c.result),
+               _h(c.detail)))
+
+    file_rows = []
+    for f in d.files:
+        packer = d.packers.get(f.name)
+        note = ("%s at +%d" % (packer["name"], packer["offset"])) if packer \
+            else ""
+        file_rows.append(
+            '<tr><td>%s</td><td>%s</td><td class="num">$%04X</td>'
+            '<td class="num">$%04X</td><td class="num">%d</td>'
+            '<td class="%s">%s</td><td>%s</td></tr>'
+            % (_h(f.name), _h(f.type_name), f.load, f.end, f.size,
+               "PASS" if f.data_block.checksum_ok else "FAIL",
+               "ok" if f.data_block.checksum_ok else "bad", _h(note)))
+    if not file_rows:
+        file_rows.append('<tr><td colspan="7">No CBM ROM-loader files were '
+                         'recovered from this tape.</td></tr>')
+
+    region_rows = []
+    for r in d.regions:
+        clusters = ", ".join("$%02X (%.0f%%)" % (c.center, c.share * 100)
+                             for c in r.clusters)
+        region_rows.append(
+            '<tr><td>%s</td><td class="num">%d</td><td class="num">%.2f s</td>'
+            '<td class="num">%s</td></tr>'
+            % (_h(REGION_LABELS.get(r.kind, r.kind)), r.pulse_count,
+               seconds(r.cycles, d.header), _h(clusters or "-")))
+
+    prov = []
+    for name, used in sorted(d.enrichments.items()):
+        prov.append("<li>%s: %s</li>"
+                    % (_h(name), "used" if used else "not used"))
+
+    entry = ("$%04X (SYS %d)" % (d.sys_entry, d.sys_entry)) if d.sys_entry \
+        else "not found in a BASIC stub"
+
+    screenshot = ""
+    if d.screenshot_data_uri:
+        screenshot = ('<figure><img src="%s" alt="title screen" '
+                      'style="width:100%%;max-width:640px;border:1px solid '
+                      '#d8dce1"/></figure>' % d.screenshot_data_uri)
+
+    return (
+        '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>%s - tape dossier</title><style>%s</style></head><body>'
+        '<h1>%s</h1>'
+        '<p class="sub">%s &middot; %s &middot; %.2f seconds &middot; '
+        '%d pulses</p>'
+        '%s'
+        '<h2>Verification report</h2>'
+        '<table><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr>'
+        '</thead><tbody>%s</tbody></table>'
+        '<p class="verdict">%s</p>'
+        '<h2>Tape map</h2><figure>%s</figure>'
+        '<h2>Files</h2>'
+        '<table><thead><tr><th>Name</th><th>Type</th><th>Load</th><th>End+1</th>'
+        '<th>Size</th><th>Checksum</th><th>Cruncher</th></tr></thead>'
+        '<tbody>%s</tbody></table>'
+        '<p class="sub">Machine-code entry point: %s</p>'
+        '<h2>Memory map</h2><figure>%s</figure>'
+        '<h2>Regions</h2>'
+        '<table><thead><tr><th>Kind</th><th>Pulses</th><th>Duration</th>'
+        '<th>Pulse clusters</th></tr></thead><tbody>%s</tbody></table>'
+        '<h2>Provenance</h2><ul class="prov">%s</ul>'
+        '<p class="prov">Generated by tap2pdf %s. This document states what '
+        'was checked and what was not: a check that did not run is never '
+        'shown as a pass.</p>'
+        '</body></html>\n'
+        % (_h(d.title), CSS, _h(d.title), _h(d.header.platform),
+           _h(d.header.video), d.duration, d.pulse_count, screenshot,
+           "".join(check_rows), _h(d.verdict_text),
+           tape_map_svg(d.regions, d.header), "".join(file_rows), _h(entry),
+           memory_map_svg(d.files), "".join(region_rows), "".join(prov),
+           _h(__version__)))
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
@@ -784,11 +954,43 @@ def build_parser():
     return p
 
 
+def default_output(tape):
+    base = os.path.basename(tape)
+    stem = base[:-4] if base.lower().endswith(".tap") else base
+    return os.path.join(os.path.dirname(os.path.abspath(tape)),
+                        stem + "-dossier.html")
+
+
+def _write_text(path, text):
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+    except OSError as exc:
+        raise Refusal(EXIT_OUTPUT, "cannot write %s: %s" % (path, exc))
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         if not os.path.isfile(args.tape):
             raise Refusal(EXIT_INPUT, "cannot read: " + args.tape)
+        try:
+            with open(args.tape, "rb") as fh:
+                data = fh.read()
+        except OSError as exc:
+            raise Refusal(EXIT_INPUT, "cannot read %s: %s" % (args.tape, exc))
+
+        dossier = analyse(data, args)
+
+        html_path = args.output or default_output(args.tape)
+        _write_text(html_path, render_html(dossier))
+        if not args.quiet:
+            sys.stderr.write("wrote %s\n" % html_path)
+
+        for check in dossier.checks:
+            if check.result == FAIL and not args.quiet:
+                sys.stderr.write("  %s: %s\n" % (check.name, check.detail))
+
         return EXIT_OK
     except Refusal as r:
         sys.stderr.write("tap2pdf: " + r.message + "\n")
