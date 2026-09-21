@@ -132,6 +132,124 @@ def seconds(cycles, header):
     return cycles / float(clock)
 
 
+# --------------------------------------------------------------- classify --
+CBM_SHORT, CBM_MEDIUM, CBM_LONG = 0x30, 0x42, 0x56
+CBM_TOLERANCE = 6
+WINDOW = 256
+
+
+@dataclass
+class Cluster:
+    center: int
+    count: int
+    share: float
+
+
+@dataclass
+class Region:
+    kind: str
+    start_index: int
+    end_index: int
+    pulse_count: int
+    cycles: int
+    clusters: list = field(default_factory=list)
+
+
+def histogram(pulses):
+    counts = {}
+    for p in pulses:
+        key = min(255, p.cycles // 8)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def find_clusters(hist, min_share=0.02):
+    """Group neighbouring pulse widths. Tape speed wobbles, so one logical
+    width shows up spread across a few adjacent byte values."""
+    total = sum(hist.values()) or 1
+    groups = []
+    for value in sorted(hist):
+        if groups and value - groups[-1][-1] <= 2:
+            groups[-1].append(value)
+        else:
+            groups.append([value])
+    out = []
+    for group in groups:
+        count = sum(hist[v] for v in group)
+        share = count / float(total)
+        if share < min_share:
+            continue
+        peak = max(group, key=lambda v: hist[v])
+        out.append(Cluster(peak, count, share))
+    return sorted(out, key=lambda c: c.center)
+
+
+def looks_like_cbm(clusters):
+    """All three ROM widths present. Used to judge a whole tape."""
+    centers = [c.center for c in clusters]
+    return all(any(abs(c - want) <= CBM_TOLERANCE for c in centers)
+               for want in (CBM_SHORT, CBM_MEDIUM, CBM_LONG))
+
+
+def _near_cbm(center):
+    for want in (CBM_SHORT, CBM_MEDIUM, CBM_LONG):
+        if abs(center - want) <= CBM_TOLERANCE:
+            return want
+    return None
+
+
+def _window_is_cbm(clusters):
+    """Judge one window, where the long pulse may be too rare to survive.
+
+    A long pulse occurs once per byte - about 5% of pulses - so in a short
+    window it often falls below the noise threshold and only the short and
+    medium widths remain. Requiring all three here made a plain ROM tape
+    segment into alternating cbm/turbo bands, which invents turbo regions
+    that do not exist. So: every cluster must be a CBM width, and short and
+    medium must both be present. The long one is welcome but not required.
+    """
+    matched = [_near_cbm(c.center) for c in clusters]
+    if any(m is None for m in matched):
+        return False
+    return CBM_SHORT in matched and CBM_MEDIUM in matched
+
+
+def _classify_window(window):
+    clusters = find_clusters(histogram(window), min_share=0.05)
+    if not clusters:
+        return "unclassified", clusters
+    if len(clusters) == 1:
+        top = clusters[0]
+        if top.share > 0.90:
+            return ("gap" if top.center >= 255 else "leader"), clusters
+        return "unclassified", clusters
+    if _window_is_cbm(clusters):
+        return "cbm", clusters
+    if len(clusters) == 2:
+        return "turbo", clusters
+    return "unclassified", clusters
+
+
+def segment(pulses):
+    regions = []
+    for start in range(0, len(pulses), WINDOW):
+        window = pulses[start:start + WINDOW]
+        kind, _clusters = _classify_window(window)
+        end = start + len(window)
+        cycles = sum(p.cycles for p in window)
+        if regions and regions[-1].kind == kind:
+            r = regions[-1]
+            r.end_index = end
+            r.pulse_count += len(window)
+            r.cycles += cycles
+        else:
+            regions.append(Region(kind, start, end, len(window), cycles))
+    for r in regions:
+        r.clusters = find_clusters(
+            histogram(pulses[r.start_index:r.end_index]), min_share=0.05)
+    return regions
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
