@@ -13,7 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-__version__ = "0.1.0-dev"
+__version__ = "1.0"
 
 EXIT_OK = 0
 EXIT_USAGE = 1
