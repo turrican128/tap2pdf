@@ -500,6 +500,143 @@ def identify_packer(data, load):
     return None
 
 
+# ----------------------------------------------------------------- verify --
+# Most people who own a TAP downloaded it. The question they actually have is
+# whether the file is any good, so that is what the dossier opens with - and
+# the part that makes it worth trusting is the checks that did NOT run.
+PASS = "PASS"
+FAIL = "FAIL"
+NOT_CHECKED = "NOT CHECKED"
+
+
+@dataclass
+class Check:
+    name: str
+    result: str
+    detail: str
+
+
+def build_checks(header, pulses, regions, files, tapclean_used):
+    checks = []
+
+    checks.append(Check(
+        "TAP signature", PASS,
+        "%s, version %d, %s, %s" % (header.signature.decode("ascii"),
+                                    header.version, header.platform,
+                                    header.video)))
+
+    if header.length_mismatch == 0:
+        checks.append(Check(
+            "Header length vs actual data", PASS,
+            "declared %d bytes, file holds %d"
+            % (header.declared_length, header.actual_length)))
+    else:
+        checks.append(Check(
+            "Header length vs actual data", FAIL,
+            "header says %d bytes, file holds %d (%+d). Cosmetic; repairable "
+            "with `tapclean -rs`."
+            % (header.declared_length, header.actual_length,
+               header.length_mismatch)))
+
+    overflows = sum(1 for p in pulses if p.overflow)
+    checks.append(Check(
+        "Pulse stream integrity", PASS,
+        "%d pulses, none truncated%s"
+        % (len(pulses),
+           (", %d of unrecorded length (version 0 overflow)" % overflows)
+           if overflows else "")))
+
+    blocks = [b for f in files for b in (f.header_block, f.data_block)]
+    if not blocks:
+        checks.append(Check(
+            "CBM block checksums", NOT_CHECKED,
+            "no CBM ROM-loader blocks were found on this tape"))
+    else:
+        bad = [b for b in blocks if not b.checksum_ok]
+        if bad:
+            checks.append(Check(
+                "CBM block checksums", FAIL,
+                "%d of %d blocks fail: %s"
+                % (len(bad), len(blocks),
+                   ", ".join("expected $%02X, computed $%02X"
+                             % (b.checksum_stored, b.checksum_computed)
+                             for b in bad))))
+        else:
+            checks.append(Check("CBM block checksums", PASS,
+                                "all %d blocks pass" % len(blocks)))
+
+        disagreeing = [f for f in files if not f.copies_agree]
+        if disagreeing:
+            checks.append(Check(
+                "First copy vs repeat", FAIL,
+                "%d file(s) differ between the two recorded copies: %s"
+                % (len(disagreeing),
+                   ", ".join("%s (%d byte(s))" % (f.name, f.disagreement_count)
+                             for f in disagreeing))))
+        else:
+            checks.append(Check("First copy vs repeat", PASS,
+                                "all %d file(s) agree" % len(files)))
+
+        parity = sum(b.parity_errors for b in blocks)
+        checks.append(Check(
+            "Byte parity", PASS if parity == 0 else FAIL,
+            "no parity errors" if parity == 0
+            else "%d byte(s) carry a bad parity bit" % parity))
+
+    turbo = [r for r in regions if r.kind == "turbo"]
+    if turbo:
+        checks.append(Check(
+            "Turbo region integrity", NOT_CHECKED,
+            "%d turbo region(s), %d pulses. The format is unidentified, so "
+            "there is no checksum model to verify them against."
+            % (len(turbo), sum(r.pulse_count for r in turbo))))
+
+    unclassified = [r for r in regions if r.kind == "unclassified"]
+    if unclassified:
+        checks.append(Check(
+            "Unclassified regions", NOT_CHECKED,
+            "%d region(s), %d pulses, match no pulse pattern this tool "
+            "recognises and were not analysed further."
+            % (len(unclassified), sum(r.pulse_count for r in unclassified))))
+
+    checks.append(Check(
+        "Loader identification",
+        PASS if tapclean_used else NOT_CHECKED,
+        "identified from the supplied TAPClean report" if tapclean_used
+        else "no loader names available: run with `--tapclean <report>` to "
+             "identify them"))
+
+    if not PACKER_SIGNATURES:
+        checks.append(Check(
+            "Cruncher identification", NOT_CHECKED,
+            "no cruncher signatures are compiled into this build, so no "
+            "check was attempted"))
+
+    return checks
+
+
+def verdict(checks, regions):
+    """One plain sentence that never outruns the evidence."""
+    failed = [c for c in checks if c.result == FAIL]
+    unchecked = [c for c in checks if c.result == NOT_CHECKED]
+    has_cbm = any(r.kind == "cbm" for r in regions)
+    parts = []
+    if failed:
+        parts.append("This tape has %d failing check(s): %s."
+                     % (len(failed), ", ".join(c.name.lower()
+                                               for c in failed)))
+    elif has_cbm:
+        parts.append("The CBM portion of this tape reads cleanly.")
+    else:
+        parts.append("No CBM ROM-loader data was found on this tape.")
+    if unchecked:
+        parts.append("%d aspect(s) have not been checked (%s), so this is not "
+                     "a clean bill of health for the whole tape."
+                     % (len(unchecked),
+                        ", ".join(c.name.lower() for c in unchecked)))
+    return " ".join(parts)
+
+
 # -------------------------------------------------------------------- cli --
 class _Parser(argparse.ArgumentParser):
     """argparse exits 2 on a usage error; our documented contract says 2 means
