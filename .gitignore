@@ -9,6 +9,12 @@
 !tests/fixtures/*.prg
 !examples/*.tap
 
+# The local tape archive and anything generated from it. The extension
+# rules above do not cover .html/.nfo dossiers, and this repo is committed
+# with `git add -A` - one careless run would publish output derived from
+# commercial tapes. Ignore the whole folder, whatever is in it.
+/Tap test/
+
 # QA sweep results reference local tapes by name; they stay local too.
 qa-baseline*.json
 qa-*.json
