@@ -203,6 +203,12 @@ def main():
     write("reversed_range.tap",
           make_tap(cbm_file_declaring("BACKWARDS", 0x0900, 0x0801, hello)))
 
+    # Platform and video bytes outside the documented values. All 49 real
+    # tapes checked carry 0/0, so an unknown value here is genuinely odd and
+    # must not be silently rendered as a confident "C64 / PAL".
+    write("odd_header.tap",
+          make_tap(cbm_file("ODDBALL", 0x0801, hello), platform=7, video=5))
+
     write("truncated.tap",
           make_tap(cbm_file("HELLO", 0x0801, hello) + b"\x00\x01"))
 

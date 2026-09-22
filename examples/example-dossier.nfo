@@ -7,7 +7,9 @@ C64 / PAL / 17.16 seconds / 37736 pulses
 VERIFICATION
 ------------
 TAP signature                  PASS
-    C64-TAPE-RAW, version 1, C64, PAL
+    C64-TAPE-RAW, version 1
+Header platform and timing     PASS
+    C64, PAL, as stated by the header
 Header length vs actual data   PASS
     declared 37736 bytes, file holds 37736
 Pulse stream integrity         PASS

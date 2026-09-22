@@ -56,6 +56,17 @@ class TapHeader:
     declared_length: int
     actual_length: int
     length_mismatch: int
+    # The raw bytes, and whether they named anything documented. An
+    # undocumented value must not be rendered as a confident "C64 / PAL":
+    # the timing shown would be an assumption the file never made.
+    platform_byte: int = 0
+    video_byte: int = 0
+    platform_known: bool = True
+    video_known: bool = True
+
+    @property
+    def timing_is_assumed(self):
+        return not self.video_known
 
 
 def parse_header(data):
@@ -68,12 +79,15 @@ def parse_header(data):
     version = data[12]
     if version not in (0, 1):
         raise Refusal(EXIT_MALFORMED, "unknown TAP version %d" % version)
-    platform = PLATFORMS.get(data[13], SIGNATURES[sig])
-    video = VIDEO.get(data[14], "PAL")
+    platform_byte = data[13]
+    video_byte = data[14]
+    platform = PLATFORMS.get(platform_byte, SIGNATURES[sig])
+    video = VIDEO.get(video_byte, "PAL")
     declared = struct.unpack("<I", data[16:20])[0]
     actual = len(data) - HEADER_SIZE
     return TapHeader(sig, version, platform, video, declared, actual,
-                     actual - declared)
+                     actual - declared, platform_byte, video_byte,
+                     platform_byte in PLATFORMS, video_byte in VIDEO)
 
 
 OVERFLOW_CYCLES = 255 * 8
@@ -584,9 +598,28 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
 
     checks.append(Check(
         "TAP signature", PASS,
-        "%s, version %d, %s, %s" % (header.signature.decode("ascii"),
-                                    header.version, header.platform,
-                                    header.video)))
+        "%s, version %d" % (header.signature.decode("ascii"),
+                            header.version)))
+
+    if header.platform_known and header.video_known:
+        checks.append(Check(
+            "Header platform and timing", PASS,
+            "%s, %s, as stated by the header" % (header.platform,
+                                                 header.video)))
+    else:
+        unknown = []
+        if not header.platform_known:
+            unknown.append("platform byte $%02X names no known machine"
+                           % header.platform_byte)
+        if not header.video_known:
+            unknown.append("video byte $%02X names neither PAL nor NTSC"
+                           % header.video_byte)
+        checks.append(Check(
+            "Header platform and timing", NOT_CHECKED,
+            "%s. Every duration in this document is therefore computed from "
+            "an assumed %s %s clock, not from anything the file states. "
+            "Override with --pal or --ntsc if you know better."
+            % ("; ".join(unknown), header.platform, header.video)))
 
     if header.length_mismatch == 0:
         checks.append(Check(
@@ -928,8 +961,10 @@ def analyse(data, args):
     header = parse_header(data)
     if getattr(args, "pal", False):
         header.video = "PAL"
+        header.video_known = True       # the user asserted it on the command line
     elif getattr(args, "ntsc", False):
         header.video = "NTSC"
+        header.video_known = True
     pulses = decode_pulses(data, header)
     regions = segment(pulses)
     blocks = decode_cbm_blocks(pulses)

@@ -164,3 +164,17 @@ def test_a_header_whose_end_precedes_its_load_is_reported():
 def test_a_consistent_header_passes_the_range_check():
     *_, checks = analyse("clean_single.tap")
     assert named(checks)["File length vs header range"].result == tap2pdf.PASS
+
+
+def test_an_unknown_platform_or_video_byte_is_not_shown_as_a_confident_value():
+    # Silently substituting "C64 / PAL" for bytes that say neither puts a
+    # confident timing figure in the dossier that the file never stated.
+    *_, checks = analyse("odd_header.tap")
+    c = named(checks)["Header platform and timing"]
+    assert c.result != tap2pdf.PASS, c.detail
+    assert "$07" in c.detail and "$05" in c.detail
+
+
+def test_a_normal_header_passes_the_platform_check():
+    *_, checks = analyse("clean_single.tap")
+    assert named(checks)["Header platform and timing"].result == tap2pdf.PASS
