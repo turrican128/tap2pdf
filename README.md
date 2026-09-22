@@ -130,6 +130,7 @@ tap2pdf <tape.tap> [options]
       --vice <path>       x64sc, for a title screenshot (not wired in 1.0)
       --browser <path>    headless Edge/Chrome to use for --pdf
       --extract <dir>     write the recovered PRGs here
+      --max-size <MB>     refuse an input larger than this (default 16)
       --pal / --ntsc      clock for time calculations (default: from the file)
       --title <text>      override the document title
       --quiet             suppress the progress lines on stderr
@@ -151,6 +152,8 @@ tap2pdf <tape.tap> [options]
 | 6 | an enrichment was requested and is unavailable |
 
 A tape truncated mid-pulse is refused rather than analysed, because a document built from a fragment looks complete and is not.
+
+Exit 2 also covers a file larger than `--max-size`. Decoding needs roughly 130x the file size in memory, so an absurdly large input is refused with a message rather than taking the process down. The default of 16 MB covers any genuine C64 tape by a wide margin — the largest of 49 commercial tapes tested was 2.5 MB.
 
 ## Checking a whole archive
 

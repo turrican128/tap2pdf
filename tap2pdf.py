@@ -46,6 +46,25 @@ CLOCKS = {
 
 HEADER_SIZE = 20
 
+# Decoding amplifies a TAP substantially in memory: one Pulse object per
+# pulse, plus a symbol list alongside it. Measured at roughly 130x the file
+# size on a real tape. A genuine C64 tape side is a few megabytes at most -
+# the largest of 49 commercial tapes checked was 2.5 MB - so this default
+# covers any real tape by a wide margin while refusing input that would take
+# the process down instead of producing a message. --max-size raises it.
+DEFAULT_MAX_INPUT_MB = 16
+
+
+def refuse_if_too_large(size_bytes, limit_mb, what):
+    limit = int(limit_mb * 1024 * 1024)
+    if size_bytes > limit:
+        raise Refusal(
+            EXIT_INPUT,
+            "%s is %.1f MB, above the %d MB limit. Decoding needs roughly "
+            "130x the file size in memory, so this would likely exhaust it. "
+            "Raise the limit with --max-size <MB> if you know the machine "
+            "can take it." % (what, size_bytes / (1024.0 * 1024.0), limit_mb))
+
 
 @dataclass
 class TapHeader:
@@ -95,6 +114,11 @@ OVERFLOW_CYCLES = 255 * 8
 
 @dataclass
 class Pulse:
+    # There is one of these per pulse, and a real tape has millions. Measured
+    # on Night Breed (2.47M pulses): 136 bytes each without __slots__, 96
+    # with. dataclass(slots=True) would be tidier but needs Python 3.10, and
+    # 3.9 is the floor this project promises.
+    __slots__ = ("cycles", "overflow", "offset")
     cycles: int
     overflow: bool
     offset: int
@@ -1314,6 +1338,10 @@ def build_parser():
                    help="headless Edge/Chrome to use for --pdf")
     p.add_argument("--extract", metavar="DIR",
                    help="write the recovered PRGs here")
+    p.add_argument("--max-size", type=float, default=DEFAULT_MAX_INPUT_MB,
+                   metavar="MB",
+                   help="refuse an input larger than this (default %d MB)"
+                        % DEFAULT_MAX_INPUT_MB)
     p.add_argument("--pal", action="store_true", help="force PAL timing")
     p.add_argument("--ntsc", action="store_true", help="force NTSC timing")
     p.add_argument("--title", help="override the document title")
@@ -1344,6 +1372,8 @@ def main(argv=None):
     try:
         if not os.path.isfile(args.tape):
             raise Refusal(EXIT_INPUT, "cannot read: " + args.tape)
+        refuse_if_too_large(os.path.getsize(args.tape), args.max_size,
+                            os.path.basename(args.tape))
         try:
             with open(args.tape, "rb") as fh:
                 data = fh.read()

@@ -68,6 +68,12 @@ def examine(path, root=None):
            "files": 0, "checks": {}, "verdict": ""}
     started = time.time()
     try:
+        # Same limit the CLI applies. One oversized tape in an archive must
+        # not take the whole sweep down; it is refused, and a refusal is a
+        # pass.
+        tap2pdf.refuse_if_too_large(os.path.getsize(path),
+                                    tap2pdf.DEFAULT_MAX_INPUT_MB,
+                                    os.path.basename(path))
         with open(path, "rb") as fh:             # read only, always
             data = fh.read()
         row["bytes"] = len(data)
