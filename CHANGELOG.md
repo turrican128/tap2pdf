@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.0.1
+
+Fixes from an external code review of 1.0. Take this version: 1.0 could
+report a clean result for checks it had not actually run.
+
+- **A missing repeat copy was reported as the copies agreeing.** A tape
+  carrying only the first copy of each block got PASS, "all files agree",
+  for a comparison that never happened. Missing repeats are now counted
+  separately: FAIL when copies differ, NOT CHECKED when there is no repeat,
+  PASS only when a real comparison passed.
+- **Blocks that decoded but formed no file vanished from verification.** On
+  Cobra (The Hit Squad) that hid a failing checksum behind "no CBM ROM-loader
+  blocks were found on this tape"; on WWF Side 1 it hid two. Every decoded
+  block is now verified, and a new Block structure check reports blocks that
+  belong to no complete file instead of dropping them.
+- **Repeat blocks were never checksum-verified at all.** The block list held
+  only the first copy of each pair, so half the blocks on a normal tape went
+  unchecked. A clean single-file tape reported "all 2 blocks pass" for a tape
+  that has four.
+- **The header's address range was never compared with the data recovered.**
+  The dossier could print a claimed range and a recovered size that cannot
+  both be true. Now reported per file, including a header whose end address
+  falls below its load address.
+- **An unknown platform or video byte became a confident "C64 / PAL".** Every
+  duration in the document was then computed from a clock the file never
+  named. The bytes are now reported as unknown and the timing stated as an
+  assumption; `--pal`/`--ntsc` resolves it.
+- **The QA sweep keyed tapes by basename**, so in a recursive run two tapes
+  called `game.tap` in different folders overwrote each other and whatever
+  changed in the loser was never reported. Rows now carry a path-relative id.
+- **Large inputs could exhaust memory rather than produce a message.**
+  Measured at 179x the file size; `__slots__` on the pulse object brings that
+  to 139x, and an input above `--max-size` (default 16 MB) is refused before
+  it is read.
+- The release build pins PyInstaller, pytest and the third-party release
+  action, since those decide the bytes people download.
+
 ## 1.0
 
 First release.

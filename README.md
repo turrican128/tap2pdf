@@ -10,15 +10,21 @@ $ tap2pdf "Human Race.tap" --nfo
 VERIFICATION
 ------------
 TAP signature                  PASS
-    C64-TAPE-RAW, version 1, C64, PAL
+    C64-TAPE-RAW, version 1
+Header platform and timing     PASS
+    C64, PAL, as stated by the header
 Header length vs actual data   PASS
     declared 788680 bytes, file holds 788680
 Pulse stream integrity         PASS
     788644 pulses, none truncated
 CBM block checksums            PASS
-    all 2 blocks pass
+    all 4 decoded blocks pass
+Block structure                PASS
+    all 4 decoded block(s) belong to a complete file
 First copy vs repeat           PASS
     all 1 file(s) agree
+File length vs header range    PASS
+    all 1 file(s) carry exactly the bytes their header declares
 Byte parity                    PASS
     no parity errors
 Turbo region integrity         NOT CHECKED
@@ -27,6 +33,7 @@ Turbo region integrity         NOT CHECKED
 Loader identification          NOT CHECKED
     no loader names available: run with `--tapclean <report>` to identify
     them
+    [two further NOT CHECKED rows trimmed for this README]
 
 FILES
 -----
