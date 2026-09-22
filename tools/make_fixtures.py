@@ -175,6 +175,17 @@ def main():
     write("no_repeats.tap",
           make_tap(cbm_file_no_repeats("LONELY", 0x0801, hello)))
 
+    # Blocks that decode but never become a file: a data block pair with no
+    # header in front of it, carrying a wrong checksum. Seen on real tapes
+    # (Cobra, WWF) where the CBM portion is partial. The checksum failure
+    # must still be reported, and the dossier must not claim no blocks were
+    # found when four of them were decoded.
+    write("orphan_blocks.tap",
+          make_tap(encode_block(hello, 0x89, LEADER_FIRST,
+                                checksum_override=good ^ 0xFF)
+                   + encode_block(hello, 0x09, LEADER_REPEAT,
+                                  checksum_override=good ^ 0xFF)))
+
     write("truncated.tap",
           make_tap(cbm_file("HELLO", 0x0801, hello) + b"\x00\x01"))
 

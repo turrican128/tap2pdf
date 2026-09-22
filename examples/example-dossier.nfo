@@ -13,7 +13,9 @@ Header length vs actual data   PASS
 Pulse stream integrity         PASS
     37736 pulses, none truncated
 CBM block checksums            PASS
-    all 4 blocks pass
+    all 8 decoded blocks pass
+Block structure                PASS
+    all 8 decoded block(s) belong to a complete file
 First copy vs repeat           PASS
     all 2 file(s) agree
 Byte parity                    PASS

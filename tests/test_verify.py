@@ -112,3 +112,33 @@ def test_a_file_with_no_repeat_does_not_claim_its_copies_agree():
         tap2pdf.decode_cbm_blocks(pulses)))[0]
     assert f.missing_repeats > 0
     assert not f.copies_agree
+
+
+def test_decoded_blocks_that_form_no_file_are_still_verified():
+    # Found on real tapes (Cobra, WWF): blocks decode fine but never pair
+    # into a file, so their checksum failures vanished and the dossier
+    # claimed no blocks were found at all. Both statements were false.
+    data = (FIXTURES / "orphan_blocks.tap").read_bytes()
+    h = tap2pdf.parse_header(data)
+    pulses = tap2pdf.decode_pulses(data, h)
+    blocks = tap2pdf.decode_cbm_blocks(pulses)
+    files = tap2pdf.build_files(tap2pdf.pair_blocks(blocks))
+    assert blocks and not files, "fixture must decode blocks but build no file"
+
+    checks = tap2pdf.build_checks(h, pulses, tap2pdf.segment(pulses), files,
+                                  False, blocks=blocks)
+    c = named(checks)["CBM block checksums"]
+    assert c.result == tap2pdf.FAIL, c.detail
+    assert "no CBM ROM-loader blocks were found" not in c.detail
+
+
+def test_blocks_outside_a_file_are_reported_as_such():
+    data = (FIXTURES / "orphan_blocks.tap").read_bytes()
+    h = tap2pdf.parse_header(data)
+    pulses = tap2pdf.decode_pulses(data, h)
+    blocks = tap2pdf.decode_cbm_blocks(pulses)
+    checks = tap2pdf.build_checks(h, pulses, tap2pdf.segment(pulses), [],
+                                  False, blocks=blocks)
+    c = named(checks)["Block structure"]
+    assert c.result in (tap2pdf.FAIL, tap2pdf.NOT_CHECKED)
+    assert "2" in c.detail

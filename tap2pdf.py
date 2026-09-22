@@ -287,8 +287,20 @@ class CbmFile:
     data: bytes
     header_block: CbmBlock
     data_block: CbmBlock
+    # The repeat copies, or None when the tape did not carry them. Held so
+    # that every block belonging to a file can be verified: keeping only the
+    # first copies meant half the blocks on a normal tape were never
+    # checksum-checked at all.
+    header_repeat: object
+    data_repeat: object
     missing_repeats: int
     disagreement_count: int
+
+    @property
+    def all_blocks(self):
+        return [b for b in (self.header_block, self.data_block,
+                            self.header_repeat, self.data_repeat)
+                if b is not None]
 
     @property
     def copies_agree(self):
@@ -452,6 +464,7 @@ def build_files(pairs):
         data_diff, data_missing = _compare_copies(data_first, data_repeat)
         files.append(CbmFile(name, ftype, load, end, data_first.payload,
                              hdr_first, data_first,
+                             hdr_repeat, data_repeat,
                              hdr_missing + data_missing,
                              hdr_diff + data_diff))
         i += 2
@@ -558,7 +571,15 @@ class Check:
     detail: str
 
 
-def build_checks(header, pulses, regions, files, tapclean_used, loaders=None):
+def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
+                 blocks=None):
+    """`blocks` is every block the decoder recovered, not only those that
+    were assembled into files.
+
+    Verifying only the blocks belonging to files meant a block that decoded
+    but never paired into one vanished from the report: its failing checksum
+    was never mentioned, and the dossier stated that no blocks were found at
+    all. Both were false, and on real tapes both happened at once."""
     checks = []
 
     checks.append(Check(
@@ -588,28 +609,53 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None):
            (", %d of unrecorded length (version 0 overflow)" % overflows)
            if overflows else "")))
 
-    blocks = [b for f in files for b in (f.header_block, f.data_block)]
-    if not blocks:
+    in_files = [b for f in files for b in f.all_blocks]
+    all_blocks = list(blocks) if blocks is not None else in_files
+    if not all_blocks:
         checks.append(Check(
             "CBM block checksums", NOT_CHECKED,
             "no CBM ROM-loader blocks were found on this tape"))
     else:
-        bad = [b for b in blocks if not b.checksum_ok]
+        bad = [b for b in all_blocks if not b.checksum_ok]
         if bad:
             checks.append(Check(
                 "CBM block checksums", FAIL,
-                "%d of %d blocks fail: %s"
-                % (len(bad), len(blocks),
+                "%d of %d decoded blocks fail: %s"
+                % (len(bad), len(all_blocks),
                    ", ".join("expected $%02X, computed $%02X"
                              % (b.checksum_stored, b.checksum_computed)
                              for b in bad))))
         else:
             checks.append(Check("CBM block checksums", PASS,
-                                "all %d blocks pass" % len(blocks)))
+                                "all %d decoded blocks pass" % len(all_blocks)))
+
+        loose = len(all_blocks) - len(in_files)
+        if loose > 0:
+            checks.append(Check(
+                "Block structure", NOT_CHECKED,
+                "%d of %d decoded block(s) do not form a complete file (a "
+                "header paired with its data), so they are not listed under "
+                "Files. Their checksums are included in the result above. "
+                "This is normal on a tape whose CBM section is only a "
+                "bootstrap for a turbo loader."
+                % (loose, len(all_blocks))))
+        else:
+            checks.append(Check(
+                "Block structure", PASS,
+                "all %d decoded block(s) belong to a complete file"
+                % len(all_blocks)))
 
         differing = [f for f in files if f.disagreement_count]
         missing = [f for f in files if f.missing_repeats]
-        if differing:
+        if not files:
+            # "all 0 file(s) agree" is a pass for a comparison that had no
+            # subject. Blocks decoded but none were assembled into a file.
+            checks.append(Check(
+                "First copy vs repeat", NOT_CHECKED,
+                "no complete file was assembled from the %d decoded block(s), "
+                "so no first/repeat comparison was possible"
+                % len(all_blocks)))
+        elif differing:
             note = ("%d file(s) differ between the two recorded copies: %s"
                     % (len(differing),
                        ", ".join("%s (%d byte(s))" % (f.name,
@@ -631,7 +677,7 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None):
             checks.append(Check("First copy vs repeat", PASS,
                                 "all %d file(s) agree" % len(files)))
 
-        parity = sum(b.parity_errors for b in blocks)
+        parity = sum(b.parity_errors for b in all_blocks)
         checks.append(Check(
             "Byte parity", PASS if parity == 0 else FAIL,
             "no parity errors" if parity == 0
@@ -863,7 +909,8 @@ def analyse(data, args):
         header.video = "NTSC"
     pulses = decode_pulses(data, header)
     regions = segment(pulses)
-    files = build_files(pair_blocks(decode_cbm_blocks(pulses)))
+    blocks = decode_cbm_blocks(pulses)
+    files = build_files(pair_blocks(blocks))
     sys_entry = None
     packers = {}
     for f in files:
@@ -877,7 +924,8 @@ def analyse(data, args):
     if report_path:
         loaders = read_tapclean_report(report_path)["loaders"]
     checks = build_checks(header, pulses, regions, files,
-                          tapclean_used=bool(report_path), loaders=loaders)
+                          tapclean_used=bool(report_path), loaders=loaders,
+                          blocks=blocks)
     return Dossier(
         title=getattr(args, "title", None) or os.path.basename(args.tape),
         header=header, regions=regions, files=files, checks=checks,
