@@ -71,3 +71,33 @@ def test_the_sweep_never_writes_into_the_folder_it_scans(tmp_path):
     before = sorted(p.name for p in tmp_path.iterdir())
     qa_sweep.sweep([str(tmp_path / "x.tap")])
     assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
+def test_tapes_with_the_same_basename_do_not_collide(tmp_path):
+    # TOSEC sets and side-a/side-b layouts repeat basenames across folders.
+    # Keying a baseline by basename alone made one silently overwrite the
+    # other, hiding whatever changed in the loser.
+    a = tmp_path / "side-a"
+    b = tmp_path / "side-b"
+    a.mkdir()
+    b.mkdir()
+    shutil.copy(str(FIXTURES / "clean_single.tap"), str(a / "game.tap"))
+    shutil.copy(str(FIXTURES / "bad_checksum.tap"), str(b / "game.tap"))
+
+    rows = qa_sweep.sweep(qa_sweep.scan(str(tmp_path), recurse=True),
+                          root=str(tmp_path))
+    ids = [r["id"] for r in rows]
+    assert len(set(ids)) == 2, ids
+    assert all("/" in i for i in ids), ids
+
+
+def test_a_changed_verdict_is_not_hidden_by_a_duplicate_basename():
+    base = [{"id": "side-a/game.tap", "name": "game.tap", "outcome": "ok",
+             "verdict": "clean", "files": 1, "checks": {}},
+            {"id": "side-b/game.tap", "name": "game.tap", "outcome": "ok",
+             "verdict": "clean", "files": 1, "checks": {}}]
+    now = [dict(base[0]),
+           dict(base[1], verdict="SOMETHING ELSE")]
+    changes = qa_sweep.compare(base, now)
+    assert len(changes) == 1, changes
+    assert "side-b/game.tap" in changes[0]

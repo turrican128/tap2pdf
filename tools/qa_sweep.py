@@ -42,8 +42,27 @@ def scan(folder, recurse=False):
     return sorted(out)
 
 
-def examine(path):
-    row = {"name": os.path.basename(path), "bytes": 0, "outcome": "crash",
+def identity(path, root=None):
+    """A stable key for one tape.
+
+    The basename alone is not unique: TOSEC sets and side-a/side-b
+    layouts repeat names across folders, and keying a baseline by
+    basename let one tape silently overwrite another, hiding whatever
+    changed in the loser.
+    """
+    if root:
+        try:
+            rel = os.path.relpath(path, root)
+        except ValueError:                   # different drive on Windows
+            rel = path
+    else:
+        rel = os.path.basename(path)
+    return rel.replace(os.sep, "/")
+
+
+def examine(path, root=None):
+    row = {"id": identity(path, root),
+           "name": os.path.basename(path), "bytes": 0, "outcome": "crash",
            "exit_code": None, "error": "", "version": None, "platform": None,
            "duration_s": 0.0, "elapsed_s": 0.0, "pulses": 0, "regions": [],
            "files": 0, "checks": {}, "verdict": ""}
@@ -77,39 +96,45 @@ def examine(path):
     return row
 
 
-def sweep(paths, progress=False):
+def sweep(paths, progress=False, root=None):
     rows = []
     for i, p in enumerate(paths, 1):
         if progress:
             sys.stderr.write("[%d/%d] %s\n"
-                             % (i, len(paths), os.path.basename(p)))
+                             % (i, len(paths), identity(p, root)))
             sys.stderr.flush()
-        rows.append(examine(p))
+        rows.append(examine(p, root))
     return rows
 
 
+def _key(row):
+    """Prefer the path-relative id; fall back to the bare name so a
+    baseline written before this change still compares."""
+    return row.get("id") or row["name"]
+
+
 def compare(baseline, current):
-    was = dict((r["name"], r) for r in baseline)
+    was = dict((_key(r), r) for r in baseline)
     changes = []
     for r in current:
-        old = was.get(r["name"])
+        old = was.get(_key(r))
         if old is None:
-            changes.append("NEW      %s (%s)" % (r["name"], r["outcome"]))
+            changes.append("NEW      %s (%s)" % (_key(r), r["outcome"]))
             continue
         if old["outcome"] != r["outcome"]:
             changes.append("OUTCOME  %s: %s -> %s"
-                           % (r["name"], old["outcome"], r["outcome"]))
+                           % (_key(r), old["outcome"], r["outcome"]))
         elif old.get("verdict") != r.get("verdict"):
             changes.append("VERDICT  %s: %r -> %r"
-                           % (r["name"], old.get("verdict"),
+                           % (_key(r), old.get("verdict"),
                               r.get("verdict")))
         elif old.get("files") != r.get("files"):
             changes.append("FILES    %s: %s -> %s"
-                           % (r["name"], old.get("files"), r.get("files")))
+                           % (_key(r), old.get("files"), r.get("files")))
         elif old.get("checks") != r.get("checks"):
             changes.append("CHECKS   %s: %s -> %s"
-                           % (r["name"], old.get("checks"), r.get("checks")))
-    seen = set(r["name"] for r in current)
+                           % (_key(r), old.get("checks"), r.get("checks")))
+    seen = set(_key(r) for r in current)
     for name in was:
         if name not in seen:
             changes.append("GONE     %s" % name)
@@ -127,7 +152,7 @@ def report(rows, slow_seconds):
             tail = r["error"].splitlines()
             note = tail[-1] if tail else ""
         print("%-40s %-8s %5s %8s %6.1f  %s"
-              % (r["name"][:40], r["outcome"], r["files"], r["pulses"],
+              % (_key(r)[-40:], r["outcome"], r["files"], r["pulses"],
                  r["elapsed_s"], str(note)[:110]))
 
     crashes = [r for r in rows if r["outcome"] == "crash"]
@@ -144,12 +169,12 @@ def report(rows, slow_seconds):
           % len(failing))
     if slow:
         print("slow (>= %.1fs): %s"
-              % (slow_seconds, ", ".join(r["name"] for r in slow)))
+              % (slow_seconds, ", ".join(_key(r) for r in slow)))
     if crashes:
         print()
         print("CRASHES - these are bugs in tap2pdf, not bad tapes:")
         for r in crashes:
-            print("  %s\n%s\n" % (r["name"], r["error"]))
+            print("  %s\n%s\n" % (_key(r), r["error"]))
     return crashes
 
 
@@ -173,7 +198,7 @@ def main(argv=None):
         print("no .tap files found in %s" % args.folder)
         return 0
 
-    rows = sweep(paths, progress=True)
+    rows = sweep(paths, progress=True, root=args.folder)
     crashes = report(rows, args.slow_seconds)
 
     if args.json:
