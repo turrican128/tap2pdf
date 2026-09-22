@@ -18,6 +18,8 @@ Block structure                PASS
     all 8 decoded block(s) belong to a complete file
 First copy vs repeat           PASS
     all 2 file(s) agree
+File length vs header range    PASS
+    all 2 file(s) carry exactly the bytes their header declares
 Byte parity                    PASS
     no parity errors
 Loader identification          NOT CHECKED

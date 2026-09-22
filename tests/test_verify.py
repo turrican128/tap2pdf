@@ -142,3 +142,25 @@ def test_blocks_outside_a_file_are_reported_as_such():
     c = named(checks)["Block structure"]
     assert c.result in (tap2pdf.FAIL, tap2pdf.NOT_CHECKED)
     assert "2" in c.detail
+
+
+def test_a_header_claiming_more_bytes_than_were_recovered_is_reported():
+    # The header says $0801-$0900 (255 bytes); the data block carries 64.
+    # Printing both numbers side by side without noticing they contradict
+    # each other shows two figures that cannot both be true.
+    *_, checks = analyse("length_mismatch.tap")
+    c = named(checks)["File length vs header range"]
+    assert c.result == tap2pdf.FAIL, c.detail
+    assert "SHORTFALL" in c.detail
+
+
+def test_a_header_whose_end_precedes_its_load_is_reported():
+    *_, checks = analyse("reversed_range.tap")
+    c = named(checks)["File length vs header range"]
+    assert c.result == tap2pdf.FAIL, c.detail
+    assert "BACKWARDS" in c.detail
+
+
+def test_a_consistent_header_passes_the_range_check():
+    *_, checks = analyse("clean_single.tap")
+    assert named(checks)["File length vs header range"].result == tap2pdf.PASS

@@ -677,6 +677,29 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
             checks.append(Check("First copy vs repeat", PASS,
                                 "all %d file(s) agree" % len(files)))
 
+        if files:
+            # The header states a load and an end address; the data block
+            # carries the bytes. Printing both without checking they agree
+            # puts two numbers in the dossier that cannot both be true.
+            wrong = []
+            for f in files:
+                if f.end < f.load:
+                    wrong.append("%s: header end $%04X is below its load "
+                                 "address $%04X" % (f.name, f.end, f.load))
+                elif (f.end - f.load) != f.size:
+                    wrong.append("%s: header claims %d bytes ($%04X-$%04X), "
+                                 "%d recovered"
+                                 % (f.name, f.end - f.load, f.load, f.end,
+                                    f.size))
+            if wrong:
+                checks.append(Check("File length vs header range", FAIL,
+                                    "; ".join(wrong)))
+            else:
+                checks.append(Check(
+                    "File length vs header range", PASS,
+                    "all %d file(s) carry exactly the bytes their header "
+                    "declares" % len(files)))
+
         parity = sum(b.parity_errors for b in all_blocks)
         checks.append(Check(
             "Byte parity", PASS if parity == 0 else FAIL,

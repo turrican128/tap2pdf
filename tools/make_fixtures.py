@@ -103,6 +103,15 @@ def cbm_file_no_repeats(name, load, body, ftype=3):
             + encode_block(body, 0x89, LEADER_REPEAT))
 
 
+def cbm_file_declaring(name, load, declared_end, body, ftype=3):
+    """A file whose header claims an address range that does not match the
+    data block that follows it. Real damaged headers do this, and a dossier
+    that prints the claimed end beside the real size without noticing the
+    contradiction is showing two numbers that cannot both be true."""
+    return (encode_block_pair(cbm_header_block(name, load, declared_end, ftype))
+            + encode_block_pair(body))
+
+
 def make_tap(payload, version=1, platform=0, video=0):
     return (b"C64-TAPE-RAW" + bytes([version, platform, video, 0])
             + struct.pack("<I", len(payload)) + payload)
@@ -185,6 +194,14 @@ def main():
                                 checksum_override=good ^ 0xFF)
                    + encode_block(hello, 0x09, LEADER_REPEAT,
                                   checksum_override=good ^ 0xFF)))
+
+    # Header claims $0801-$0900 (255 bytes); the data block carries 64.
+    write("length_mismatch.tap",
+          make_tap(cbm_file_declaring("SHORTFALL", 0x0801, 0x0900, hello)))
+
+    # Header claims an end address BELOW its load address.
+    write("reversed_range.tap",
+          make_tap(cbm_file_declaring("BACKWARDS", 0x0900, 0x0801, hello)))
 
     write("truncated.tap",
           make_tap(cbm_file("HELLO", 0x0801, hello) + b"\x00\x01"))
