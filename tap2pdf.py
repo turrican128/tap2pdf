@@ -287,8 +287,18 @@ class CbmFile:
     data: bytes
     header_block: CbmBlock
     data_block: CbmBlock
-    copies_agree: bool
+    missing_repeats: int
     disagreement_count: int
+
+    @property
+    def copies_agree(self):
+        """Only true when there was something to compare AND it matched.
+
+        An absent repeat is not agreement. Returning 'they agree' for a
+        comparison that never happened is the tool claiming more than it
+        established.
+        """
+        return self.missing_repeats == 0 and self.disagreement_count == 0
 
     @property
     def size(self):
@@ -409,13 +419,19 @@ def pair_blocks(blocks):
     return pairs
 
 
-def _disagreements(a, b):
+def _compare_copies(a, b):
+    """(disagreeing_bytes, missing) for one block and its repeat.
+
+    `missing` is 1 when there is no repeat to compare against. It is counted
+    separately and never folded into the disagreement count, because a
+    comparison that could not happen is not a comparison that passed.
+    """
     if b is None:
-        return 0
+        return 0, 1
     n = max(len(a.payload), len(b.payload))
     pa = a.payload.ljust(n, b"\x00")
     pb = b.payload.ljust(n, b"\x00")
-    return sum(1 for x, y in zip(pa, pb) if x != y)
+    return sum(1 for x, y in zip(pa, pb) if x != y), 0
 
 
 def build_files(pairs):
@@ -432,10 +448,12 @@ def build_files(pairs):
         end = p[3] | (p[4] << 8)
         name = petscii_to_ascii(p[5:21])
         data_first, data_repeat = pairs[i + 1]
-        disagree = (_disagreements(hdr_first, hdr_repeat)
-                    + _disagreements(data_first, data_repeat))
+        hdr_diff, hdr_missing = _compare_copies(hdr_first, hdr_repeat)
+        data_diff, data_missing = _compare_copies(data_first, data_repeat)
         files.append(CbmFile(name, ftype, load, end, data_first.payload,
-                             hdr_first, data_first, disagree == 0, disagree))
+                             hdr_first, data_first,
+                             hdr_missing + data_missing,
+                             hdr_diff + data_diff))
         i += 2
     return files
 
@@ -589,14 +607,26 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None):
             checks.append(Check("CBM block checksums", PASS,
                                 "all %d blocks pass" % len(blocks)))
 
-        disagreeing = [f for f in files if not f.copies_agree]
-        if disagreeing:
+        differing = [f for f in files if f.disagreement_count]
+        missing = [f for f in files if f.missing_repeats]
+        if differing:
+            note = ("%d file(s) differ between the two recorded copies: %s"
+                    % (len(differing),
+                       ", ".join("%s (%d byte(s))" % (f.name,
+                                                      f.disagreement_count)
+                                 for f in differing)))
+            if missing:
+                note += (". A further %d file(s) carry no repeat at all and "
+                         "could not be compared." % len(missing))
+            checks.append(Check("First copy vs repeat", FAIL, note))
+        elif missing:
+            # Not a pass. There was nothing to compare against.
             checks.append(Check(
-                "First copy vs repeat", FAIL,
-                "%d file(s) differ between the two recorded copies: %s"
-                % (len(disagreeing),
-                   ", ".join("%s (%d byte(s))" % (f.name, f.disagreement_count)
-                             for f in disagreeing))))
+                "First copy vs repeat", NOT_CHECKED,
+                "%d of %d file(s) carry no repeat copy on this tape, so the "
+                "two copies could not be compared: %s"
+                % (len(missing), len(files),
+                   ", ".join(f.name for f in missing))))
         else:
             checks.append(Check("First copy vs repeat", PASS,
                                 "all %d file(s) agree" % len(files)))

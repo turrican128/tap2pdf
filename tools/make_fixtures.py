@@ -90,6 +90,19 @@ def cbm_file(name, load, body, ftype=3):
             + encode_block_pair(body))
 
 
+def cbm_file_no_repeats(name, load, body, ftype=3):
+    """A tape that carries only the first copy of each block.
+
+    Real tapes exist where the repeat was never recorded, or where the second
+    half of the tape is damaged past decoding. The absence of a repeat must
+    never be reported as the two copies agreeing.
+    """
+    end = load + len(body)
+    return (encode_block(cbm_header_block(name, load, end, ftype),
+                         0x89, LEADER_FIRST)
+            + encode_block(body, 0x89, LEADER_REPEAT))
+
+
 def make_tap(payload, version=1, platform=0, video=0):
     return (b"C64-TAPE-RAW" + bytes([version, platform, video, 0])
             + struct.pack("<I", len(payload)) + payload)
@@ -158,6 +171,9 @@ def main():
 
     write("basic_sys.tap",
           make_tap(cbm_file("SYSDEMO", 0x0801, basic_sys(2064), ftype=1)))
+
+    write("no_repeats.tap",
+          make_tap(cbm_file_no_repeats("LONELY", 0x0801, hello)))
 
     write("truncated.tap",
           make_tap(cbm_file("HELLO", 0x0801, hello) + b"\x00\x01"))

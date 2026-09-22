@@ -92,3 +92,23 @@ def test_cbm_regions_with_files_still_read_cleanly():
     checks = [tap2pdf.Check("CBM block checksums", tap2pdf.PASS, "all pass")]
     text = tap2pdf.verdict(checks, regions, files=[object()])
     assert "reads cleanly" in text
+
+
+def test_a_missing_repeat_is_never_reported_as_the_copies_agreeing():
+    # A tape carrying only the first copy of each block has nothing to
+    # compare against. Reporting PASS "all files agree" for a comparison
+    # that never happened is the tool claiming more than it established.
+    *_, checks = analyse("no_repeats.tap")
+    c = named(checks)["First copy vs repeat"]
+    assert c.result == tap2pdf.NOT_CHECKED, c.detail
+    assert "repeat" in c.detail.lower()
+
+
+def test_a_file_with_no_repeat_does_not_claim_its_copies_agree():
+    data = (FIXTURES / "no_repeats.tap").read_bytes()
+    h = tap2pdf.parse_header(data)
+    pulses = tap2pdf.decode_pulses(data, h)
+    f = tap2pdf.build_files(tap2pdf.pair_blocks(
+        tap2pdf.decode_cbm_blocks(pulses)))[0]
+    assert f.missing_repeats > 0
+    assert not f.copies_agree
