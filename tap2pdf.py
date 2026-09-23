@@ -13,7 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -1207,15 +1207,24 @@ def render_nfo(d):
     return "\n".join(line[:NFO_WIDTH] for line in out) + "\n"
 
 
-def extract_files(d, directory):
+def extract_files(d, directory, tape_path=None):
     try:
         os.makedirs(directory, exist_ok=True)
     except OSError as exc:
         raise Refusal(EXIT_OUTPUT, "cannot create %s: %s" % (directory, exc))
-    written = []
+    # Work out every target first and check them all before writing any, so a
+    # refusal on the second file does not leave the first one on disk.
+    targets = []
     for i, f in enumerate(d.files):
         safe = "".join(ch if ch.isalnum() else "_" for ch in f.name) or "file"
-        path = os.path.join(directory, "%02d_%s.prg" % (i + 1, safe))
+        targets.append((f, os.path.join(directory,
+                                        "%02d_%s.prg" % (i + 1, safe))))
+    if tape_path is not None:
+        for _f, path in targets:
+            refuse_if_clobbers_input(path, tape_path, "extracted file")
+
+    written = []
+    for f, path in targets:
         try:
             with open(path, "wb") as fh:
                 fh.write(bytes([f.load & 0xFF, (f.load >> 8) & 0xFF]))
@@ -1370,6 +1379,38 @@ def default_output(tape):
                         stem + "-dossier.html")
 
 
+def _same_path(a, b):
+    """True when two paths name the same file.
+
+    samefile() is the reliable answer but needs both to exist, and the output
+    usually does not yet. The normalised-absolute comparison is the fallback,
+    and normcase matters on Windows where TAPE.TAP and tape.tap are one file.
+    """
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+    except OSError:
+        pass
+    return (os.path.normcase(os.path.abspath(a))
+            == os.path.normcase(os.path.abspath(b)))
+
+
+def refuse_if_clobbers_input(out_path, tape_path, what):
+    """The one thing this tool must never do.
+
+    Reported by an external reviewer: passing the tape's own path to -o
+    replaced it with HTML and exited 0, destroying the file the tool was
+    asked to examine - while the README promises the tape is never written.
+    Checked before every write, not only the one that was reported.
+    """
+    if _same_path(out_path, tape_path):
+        raise Refusal(
+            EXIT_OUTPUT,
+            "refusing to write the %s over the input tape (%s). tap2pdf "
+            "never writes to the tape it is reading. Choose a different "
+            "output path." % (what, os.path.basename(tape_path)))
+
+
 def _write_text(path, text):
     try:
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -1394,24 +1435,27 @@ def main(argv=None):
         dossier = analyse(data, args)
 
         html_path = args.output or default_output(args.tape)
+        refuse_if_clobbers_input(html_path, args.tape, "HTML dossier")
         _write_text(html_path, render_html(dossier))
         if not args.quiet:
             sys.stderr.write("wrote %s\n" % html_path)
 
         if args.nfo:
             nfo_path = os.path.splitext(html_path)[0] + ".nfo"
+            refuse_if_clobbers_input(nfo_path, args.tape, "NFO")
             _write_text(nfo_path, render_nfo(dossier))
             if not args.quiet:
                 sys.stderr.write("wrote %s\n" % nfo_path)
 
         if args.extract:
-            written = extract_files(dossier, args.extract)
+            written = extract_files(dossier, args.extract, args.tape)
             if not args.quiet:
                 sys.stderr.write("extracted %d file(s) to %s\n"
                                  % (len(written), args.extract))
 
         if args.pdf or args.pdf_only:
             pdf_path = os.path.splitext(html_path)[0] + ".pdf"
+            refuse_if_clobbers_input(pdf_path, args.tape, "PDF")
             render_pdf(html_path, pdf_path, args.browser)
             if not args.quiet:
                 sys.stderr.write("wrote %s\n" % pdf_path)

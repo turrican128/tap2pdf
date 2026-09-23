@@ -108,3 +108,53 @@ def test_the_size_limit_can_be_raised(tmp_path):
                         "-o", str(out), "--max-size", "64", "--quiet"],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_the_output_path_may_not_be_the_input_tape(tmp_path):
+    # Reported by an external reviewer. Passing the tape's own path to -o
+    # replaced it with HTML and exited 0, destroying the thing the tool was
+    # asked to examine while the README promises it is never written.
+    victim = tmp_path / "victim.tap"
+    original = (FIXTURES / "clean_single.tap").read_bytes()
+    victim.write_bytes(original)
+
+    r = run(str(victim), "-o", str(victim))
+    assert r.returncode == tap2pdf.EXIT_OUTPUT, r.stderr
+    assert victim.read_bytes() == original, "the input tape was modified"
+
+
+def test_a_relative_path_to_the_same_tape_is_also_refused(tmp_path):
+    victim = tmp_path / "victim.tap"
+    original = (FIXTURES / "clean_single.tap").read_bytes()
+    victim.write_bytes(original)
+
+    r = subprocess.run([sys.executable, str(ROOT / "tap2pdf.py"),
+                        str(victim), "-o", "./victim.tap"],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    assert r.returncode == tap2pdf.EXIT_OUTPUT, r.stderr
+    assert victim.read_bytes() == original
+
+
+def test_extraction_may_not_write_over_the_input_tape(tmp_path):
+    # The extracted PRGs are named NN_NAME.prg. A tape that happens to carry
+    # such a name, extracted into its own folder, would be overwritten.
+    victim = tmp_path / "01_PART_ONE.prg"
+    original = (FIXTURES / "two_files.tap").read_bytes()
+    victim.write_bytes(original)
+
+    r = run(str(victim), "-o", str(tmp_path / "out.html"),
+            "--extract", str(tmp_path))
+    assert r.returncode == tap2pdf.EXIT_OUTPUT, r.stderr
+    assert victim.read_bytes() == original
+
+
+def test_the_cli_never_writes_to_the_tape_on_a_normal_run(tmp_path):
+    # The old test of this only wrapped analyse(), which does no writing at
+    # all. The write happens in main(), so the test proved nothing.
+    tape = tmp_path / "t.tap"
+    original = (FIXTURES / "two_files.tap").read_bytes()
+    tape.write_bytes(original)
+    r = run(str(tape), "-o", str(tmp_path / "ok.html"), "--nfo",
+            "--extract", str(tmp_path / "out"))
+    assert r.returncode == 0, r.stderr
+    assert tape.read_bytes() == original

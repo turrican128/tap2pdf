@@ -65,7 +65,9 @@ Most people who own a `.tap` did not make it. They downloaded it, and the questi
 
 So that is what the dossier opens with: a verification report. After it come the things you want if you are about to crack the thing — what loads where, what the entry point is, and what the tape is actually made of.
 
-It does not modify your tape. The file is opened read-only and never written.
+It does not modify your tape. The file is opened read-only and never written, and every output path is checked against it first — pointing `-o` at the tape itself is refused with exit 5 rather than overwriting it.
+
+`--extract` does overwrite existing files in the directory you name, which is the normal behaviour for an output directory. It will not write over the input tape.
 
 ## The honesty rule
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.2
+
+One fix, from a second external review. **Take this version.**
+
+- **The input tape could be overwritten.** Passing the tape's own path to
+  `-o` replaced it with the HTML dossier and exited 0, destroying the file
+  the tool had been asked to examine. The README promises the tape is opened
+  read-only and never written; 1.0 and 1.0.1 did not keep that promise.
+
+  Every output path is now checked against the input before anything is
+  written: the HTML, the NFO, the PDF, and each extracted PRG. A collision is
+  refused with exit 5 and the tape is left untouched. Extraction works out
+  all its target paths and checks them before writing any, so a refusal on
+  the second file cannot leave the first one on disk.
+
+  The test that was supposed to cover this only wrapped `analyse()`, which
+  does no writing at all - the write happens in `main()`. It proved nothing.
+  It now exercises the real command line.
+
 ## 1.0.1
 
 Fixes from an external code review of 1.0. Take this version: 1.0 could
