@@ -13,7 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -255,8 +255,10 @@ def _window_is_cbm(clusters):
     return CBM_SHORT in matched and CBM_MEDIUM in matched
 
 
-def _classify_window(window):
-    clusters = find_clusters(histogram(window), min_share=0.05)
+def _classify_hist(hist):
+    """Classify from a pulse histogram, so spans can be judged on pooled
+    evidence rather than one 256-pulse window at a time."""
+    clusters = find_clusters(hist, min_share=0.05)
     if not clusters:
         return "unclassified", clusters
     if len(clusters) == 1:
@@ -271,25 +273,122 @@ def _classify_window(window):
     return "unclassified", clusters
 
 
-def segment(pulses):
-    regions = []
-    for start in range(0, len(pulses), WINDOW):
-        window = pulses[start:start + WINDOW]
-        kind, _clusters = _classify_window(window)
-        end = start + len(window)
-        cycles = sum(p.cycles for p in window)
-        if regions and regions[-1].kind == kind:
-            r = regions[-1]
-            r.end_index = end
-            r.pulse_count += len(window)
-            r.cycles += cycles
+def _classify_window(window):
+    return _classify_hist(histogram(window))
+
+
+# A genuine region spans many windows: a leader runs for hundreds of them, a
+# block for thousands of pulses. A run of one or two windows is not a real
+# change in what is on the tape.
+SMOOTH_MIN_RUN = 3
+
+# ...but "too short to be real" is relative to the tape, not an absolute
+# number of windows. A 3-window region is 5% of a small tape and 0.03% of a
+# 9,600-window one. Raising the absolute floor to fix a long tape destroyed
+# the structure of short ones: at a floor of 8, a two-file tape collapsed
+# from its genuine 8 regions to 1. Scaling to the tape's own length fixed
+# Night Breed (4,112 regions -> 48) while leaving every fixture's real
+# structure and every normal tape exactly as they were. Measured across 5
+# real tapes and 5 fixtures; tighter ratios began eroding genuine regions.
+SMOOTH_SCALE = 400
+
+
+def _min_run_for(window_count):
+    return max(SMOOTH_MIN_RUN, window_count // SMOOTH_SCALE)
+
+
+def _add_hist(into, other):
+    for value, count in other.items():
+        into[value] = into.get(value, 0) + count
+    return into
+
+
+def _pooled_hist(hists, a, b):
+    out = {}
+    for h in hists[a:b]:
+        _add_hist(out, h)
+    return out
+
+
+def _coalesce(spans):
+    out = []
+    for s in spans:
+        if out and out[-1][2] == s[2]:
+            out[-1][1] = s[1]
         else:
-            regions.append(Region(kind, start, end, len(window), cycles))
+            out.append(list(s))
+    return out
+
+
+def _segment_spans(hists):
+    """Spans of [first_window, last_window+1, kind].
+
+    Each window is classified by thresholds: a cluster within CBM_TOLERANCE
+    of a CBM width, a single cluster above 90%, a third cluster above the 5%
+    noise floor. Real tape speed wobbles by a couple of pulse units, which
+    crosses all three edges repeatedly, so one unchanging stretch of tape
+    came out labelled cbm, turbo, leader and unclassified in consecutive
+    windows. Night Breed produced 4,112 regions for a tape with a handful,
+    55% of them a single window, and the resulting table made a dossier
+    headless Edge could not lay out. Those regions were not real, so the
+    table was also telling the reader something untrue.
+
+    Smoothing the labels does not fix it: with a strict cbm/turbo
+    alternation every run is one window, so each takes its neighbour's label
+    and they simply swap, forever. The answer is to merge the short run with
+    a neighbour and RE-CLASSIFY the merged span from the pooled histogram -
+    judging the stretch on all its evidence at once instead of voting on
+    labels decided 256 pulses at a time.
+    """
+    min_run = _min_run_for(len(hists))
+    spans = _coalesce([[i, i + 1, _classify_hist(h)[0]]
+                       for i, h in enumerate(hists)])
+    while len(spans) > 1:
+        if all(s[1] - s[0] >= min_run for s in spans):
+            break
+        merged = []
+        i = 0
+        while i < len(spans):
+            s = spans[i]
+            if s[1] - s[0] >= min_run:
+                merged.append(list(s))
+                i += 1
+                continue
+            if i + 1 < len(spans):
+                a, b = s[0], spans[i + 1][1]
+                i += 2
+            elif merged:
+                a, b = merged.pop()[0], s[1]
+                i += 1
+            else:
+                merged.append(list(s))
+                i += 1
+                continue
+            merged.append([a, b, _classify_hist(_pooled_hist(hists, a, b))[0]])
+        merged = _coalesce(merged)
+        if len(merged) >= len(spans):
+            break                      # no progress; stop rather than spin
+        spans = merged
+    return spans
+
+
+def segment(pulses):
+    windows = [pulses[s:s + WINDOW] for s in range(0, len(pulses), WINDOW)]
+    if not windows:
+        return []
+    hists = [histogram(w) for w in windows]
+
+    regions = []
+    for a, b, kind in _segment_spans(hists):
+        start = a * WINDOW
+        end = min(len(pulses), b * WINDOW)
+        regions.append(Region(kind, start, end, end - start,
+                              sum(p.cycles for p in pulses[start:end])))
     for r in regions:
         # A lower threshold for what gets REPORTED than for what gets
-        # decided: the CBM long pulse occurs once per byte, about 5%, and
-        # at the decision threshold it vanishes from the dossier - leaving
-        # a ROM region that appears to have only two pulse widths.
+        # decided: the CBM long pulse occurs once per byte, about 5%, and at
+        # the decision threshold it vanishes from the dossier - leaving a
+        # ROM region that appears to have only two pulse widths.
         r.clusters = find_clusters(
             histogram(pulses[r.start_index:r.end_index]), min_share=0.02)
     return regions

@@ -60,3 +60,23 @@ def test_a_clean_tape_segments_into_only_a_handful_of_regions():
     _h, pulses = load("clean_single.tap")
     regions = tap2pdf.segment(pulses)
     assert len(regions) <= 8, [r.kind for r in regions]
+
+
+def test_a_wobbling_stretch_is_one_region_not_hundreds():
+    # Real tapes wobble by a couple of pulse units. That wobble crosses the
+    # CBM tolerance edge, the 90% leader threshold and the 5% noise floor,
+    # so the same unchanging stretch was labelled cbm/turbo/leader/
+    # unclassified window by window. Night Breed reported 4,112 regions for
+    # a tape that has a handful, and the Regions table it produced was large
+    # enough that headless Edge could not render the PDF.
+    _h, pulses = load("wobble.tap")
+    regions = tap2pdf.segment(pulses)
+    assert len(regions) <= 4, [(r.kind, r.pulse_count) for r in regions][:12]
+
+
+def test_smoothing_does_not_erase_genuinely_short_regions_between_long_ones():
+    # A real transition must survive: a leader, then CBM data, then leader.
+    _h, pulses = load("two_files.tap")
+    kinds = [r.kind for r in tap2pdf.segment(pulses)]
+    assert "leader" in kinds and "cbm" in kinds
+    assert len(tap2pdf.segment(pulses)) >= 4

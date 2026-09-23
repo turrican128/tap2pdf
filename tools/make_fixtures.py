@@ -137,6 +137,29 @@ def turbo_region(blocks=40):
     return bytes(out)
 
 
+def wobble_region(windows=60, window=256):
+    """One unchanging stretch of tape that the classifier used to shred.
+
+    Taken from what a real tape actually does: a dominant short pulse with a
+    secondary that drifts a couple of units either side of the CBM medium
+    width, plus an occasional long pulse crossing the noise floor. Nothing
+    about the tape changes, but the wobble crosses three separate
+    classification thresholds, so each window was labelled differently and
+    one region became hundreds.
+    """
+    out = bytearray()
+    for w in range(windows):
+        secondary = 0x48 if w % 2 == 0 else 0x4A   # inside / outside tolerance
+        for i in range(window):
+            if i % 32 == 0 and w % 3 == 0:
+                out.append(0x7F)                   # a third cluster, sometimes
+            elif i % 6 == 0:
+                out.append(secondary)
+            else:
+                out.append(0x2E)
+    return bytes(out)
+
+
 def write(name, data):
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / name).write_bytes(data)
@@ -208,6 +231,8 @@ def main():
     # must not be silently rendered as a confident "C64 / PAL".
     write("odd_header.tap",
           make_tap(cbm_file("ODDBALL", 0x0801, hello), platform=7, video=5))
+
+    write("wobble.tap", make_tap(wobble_region()))
 
     write("truncated.tap",
           make_tap(cbm_file("HELLO", 0x0801, hello) + b"\x00\x01"))

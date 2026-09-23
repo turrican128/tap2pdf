@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.0.3
+
+The Regions table was reporting regions that did not exist.
+
+- **A tape was split into thousands of regions that were not there.** Night
+  Breed reported 4,112 regions for a tape with a few dozen; 55% of them were
+  a single 256-pulse window. Each window was classified on its own by three
+  thresholds - a cluster within tolerance of a CBM width, a single cluster
+  above 90%, a third cluster above the 5% noise floor - and real tape speed
+  wobbles by a couple of pulse units, which crosses all three edges
+  repeatedly. One unchanging stretch of tape came out labelled cbm, turbo,
+  leader and unclassified in consecutive windows.
+
+  This mattered twice over. The table was telling the reader something
+  untrue, which is the failure this tool exists to avoid; and it made a
+  997 KB dossier that headless Edge could not lay out, so two real tapes
+  could not render a PDF at all.
+
+  Short runs are now merged with a neighbour and the merged span is
+  **re-classified from the pooled histogram**, judging the stretch on all its
+  evidence rather than voting on labels decided 256 pulses at a time.
+  Smoothing the labels alone does not work: with a strict cbm/turbo
+  alternation every run is one window, so each takes its neighbour's label
+  and they simply swap, forever.
+
+  "Too short to be real" scales with the tape. A 3-window region is 5% of a
+  small tape and 0.03% of a 9,600-window one, so an absolute floor that fixed
+  a long tape destroyed short ones - at a floor of 8 windows a two-file tape
+  collapsed from its genuine 8 regions to 1. The minimum is now
+  `max(3, windows / 400)`, chosen by measuring 5 real tapes against 5
+  fixtures.
+
+  Night Breed: 4,112 regions to 48, a 997 KB dossier to 19.6 KB, and a PDF
+  that had never rendered now takes seven seconds. Normal tapes are
+  untouched - Enduro Racer 6 regions before and after, Human Race 9, Cobra 8
+  - and every fixture keeps its real structure.
+
 ## 1.0.2
 
 One fix, from a second external review. **Take this version.**
