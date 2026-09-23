@@ -3,14 +3,19 @@ import tap2pdf
 
 
 def analyse(name, tapclean_used=False):
+    """Mirrors tap2pdf.analyse(). It has to: when this helper stopped short
+    of what production does, a check simply never appeared and the test that
+    depended on it failed for the wrong reason."""
     data = (FIXTURES / name).read_bytes()
     h = tap2pdf.parse_header(data)
     pulses = tap2pdf.decode_pulses(data, h)
-    regions = tap2pdf.segment(pulses)
-    files = tap2pdf.build_files(tap2pdf.pair_blocks(
-        tap2pdf.decode_cbm_blocks(pulses)))
+    stats = {}
+    regions = tap2pdf.segment(pulses, stats)
+    blocks = tap2pdf.decode_cbm_blocks(pulses)
+    files = tap2pdf.build_files(tap2pdf.pair_blocks(blocks))
     return h, pulses, regions, files, tap2pdf.build_checks(
-        h, pulses, regions, files, tapclean_used)
+        h, pulses, regions, files, tapclean_used, blocks=blocks,
+        seg_stats=stats)
 
 
 def named(checks):
@@ -178,3 +183,25 @@ def test_an_unknown_platform_or_video_byte_is_not_shown_as_a_confident_value():
 def test_a_normal_header_passes_the_platform_check():
     *_, checks = analyse("clean_single.tap")
     assert named(checks)["Header platform and timing"].result == tap2pdf.PASS
+
+
+def test_merging_does_not_erase_how_much_of_the_tape_was_never_understood():
+    # Merging is what makes the Regions table readable. On one real tape it
+    # also relabelled 11.8% of the pulses that had matched no pattern at
+    # all, and the "unclassified" row vanished with them. Readability must
+    # not quietly raise the tool's confidence about the tape.
+    *_, checks = analyse("buried_unknown.tap")
+    c = named(checks)["Unclassified stretches"]
+    assert c.result == tap2pdf.NOT_CHECKED
+    assert "256 pulses" in c.detail
+
+    # ...and the lone unknown window is indeed gone from the table.
+    data = (FIXTURES / "buried_unknown.tap").read_bytes()
+    h = tap2pdf.parse_header(data)
+    regions = tap2pdf.segment(tap2pdf.decode_pulses(data, h))
+    assert "unclassified" not in [r.kind for r in regions]
+
+
+def test_a_tape_with_nothing_unrecognised_has_no_such_row():
+    *_, checks = analyse("clean_single.tap")
+    assert "Unclassified stretches" not in named(checks)

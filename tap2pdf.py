@@ -372,11 +372,28 @@ def _segment_spans(hists):
     return spans
 
 
-def segment(pulses):
+def segment(pulses, stats=None):
+    """Regions, and optionally how much of the tape never classified.
+
+    Merging fixes the table but must not quietly raise the tool's
+    confidence. On one real tape 11.8% of the pulses matched no pattern at
+    256-pulse resolution; pooling relabelled every one of them and the
+    "unclassified" row vanished from the verification report. The share is
+    measured from the raw per-window verdicts and reported whatever the
+    merged table ends up saying.
+    """
     windows = [pulses[s:s + WINDOW] for s in range(0, len(pulses), WINDOW)]
     if not windows:
         return []
     hists = [histogram(w) for w in windows]
+
+    if stats is not None:
+        raw = 0
+        for w, h in zip(windows, hists):
+            if _classify_hist(h)[0] == "unclassified":
+                raw += len(w)
+        stats["unclassified_pulses"] = raw
+        stats["total_pulses"] = len(pulses)
 
     regions = []
     for a, b, kind in _segment_spans(hists):
@@ -709,7 +726,7 @@ class Check:
 
 
 def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
-                 blocks=None):
+                 blocks=None, seg_stats=None):
     """`blocks` is every block the decoder recovered, not only those that
     were assembled into files.
 
@@ -870,13 +887,19 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
             "there is no checksum model to verify them against."
             % (len(turbo), sum(r.pulse_count for r in turbo))))
 
-    unclassified = [r for r in regions if r.kind == "unclassified"]
-    if unclassified:
+    # Measured from the raw per-window verdicts, not from the merged table.
+    # Merging is what makes the Regions table readable, but it must not be
+    # allowed to quietly erase how much of the tape was never understood.
+    raw_unclassified = (seg_stats or {}).get("unclassified_pulses", 0)
+    total_pulses = (seg_stats or {}).get("total_pulses", 0) or len(pulses)
+    if raw_unclassified:
         checks.append(Check(
-            "Unclassified regions", NOT_CHECKED,
-            "%d region(s), %d pulses, match no pulse pattern this tool "
-            "recognises and were not analysed further."
-            % (len(unclassified), sum(r.pulse_count for r in unclassified))))
+            "Unclassified stretches", NOT_CHECKED,
+            "%d pulses (%.1f%% of the tape) match no pulse pattern this tool "
+            "recognises. They are folded into neighbouring regions in the "
+            "table above so it stays readable, but nothing here analysed "
+            "them." % (raw_unclassified,
+                       100.0 * raw_unclassified / max(1, total_pulses))))
 
     if tapclean_used:
         named = ", ".join(loaders) if loaders else ""
@@ -1089,7 +1112,8 @@ def analyse(data, args):
         header.video = "NTSC"
         header.video_known = True
     pulses = decode_pulses(data, header)
-    regions = segment(pulses)
+    seg_stats = {}
+    regions = segment(pulses, seg_stats)
     blocks = decode_cbm_blocks(pulses)
     files = build_files(pair_blocks(blocks))
     sys_entry = None
@@ -1106,7 +1130,7 @@ def analyse(data, args):
         loaders = read_tapclean_report(report_path)["loaders"]
     checks = build_checks(header, pulses, regions, files,
                           tapclean_used=bool(report_path), loaders=loaders,
-                          blocks=blocks)
+                          blocks=blocks, seg_stats=seg_stats)
     return Dossier(
         title=getattr(args, "title", None) or os.path.basename(args.tape),
         header=header, regions=regions, files=files, checks=checks,

@@ -160,6 +160,22 @@ def wobble_region(windows=60, window=256):
     return bytes(out)
 
 
+def buried_unknown(window=256):
+    """A long recognisable stretch with a single unrecognisable window in it.
+
+    That lone window is shorter than the minimum run, so merging folds it
+    into the leader around it and no "unclassified" region survives in the
+    table. The verification report must still say those pulses were never
+    analysed - readability of the table must not quietly raise the tool's
+    confidence about the tape.
+    """
+    out = bytearray([0x2E] * (window * 10))
+    for i in range(window):                  # three clusters: unrecognisable
+        out.append((0x2E, 0x48, 0x7F)[i % 3])
+    out += bytearray([0x2E] * (window * 10))
+    return bytes(out)
+
+
 def write(name, data):
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / name).write_bytes(data)
@@ -233,6 +249,8 @@ def main():
           make_tap(cbm_file("ODDBALL", 0x0801, hello), platform=7, video=5))
 
     write("wobble.tap", make_tap(wobble_region()))
+
+    write("buried_unknown.tap", make_tap(buried_unknown()))
 
     write("truncated.tap",
           make_tap(cbm_file("HELLO", 0x0801, hello) + b"\x00\x01"))
