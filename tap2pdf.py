@@ -1055,6 +1055,18 @@ def _h(text):
     return _html.escape(str(text), quote=True)
 
 
+def timing_label(header):
+    """"C64, PAL" - marked as assumed when the file did not say.
+
+    Every duration in the document is computed from this clock. Printing it
+    plainly in the headline while only the check table admits it was guessed
+    states an assumption as a fact in the most prominent line on the page.
+    """
+    if header.timing_is_assumed:
+        return "%s, %s (assumed)" % (header.platform, header.video)
+    return "%s, %s" % (header.platform, header.video)
+
+
 def render_html(d):
     check_rows = []
     for c in d.checks:
@@ -1108,7 +1120,7 @@ def render_html(d):
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>%s - tape dossier</title><style>%s</style></head><body>'
         '<h1>%s</h1>'
-        '<p class="sub">%s &middot; %s &middot; %.2f seconds &middot; '
+        '<p class="sub">%s &middot; %.2f seconds &middot; '
         '%d pulses</p>'
         '%s'
         '<h2>Verification report</h2>'
@@ -1130,8 +1142,8 @@ def render_html(d):
         'was checked and what was not: a check that did not run is never '
         'shown as a pass.</p>'
         '</body></html>\n'
-        % (_h(d.title), CSS, _h(d.title), _h(d.header.platform),
-           _h(d.header.video), d.duration, d.pulse_count, screenshot,
+        % (_h(d.title), CSS, _h(d.title), _h(timing_label(d.header)),
+           d.duration, d.pulse_count, screenshot,
            "".join(check_rows), _h(d.verdict_text),
            tape_map_svg(d.regions, d.header), "".join(file_rows), _h(entry),
            memory_map_svg(d.files), "".join(region_rows), "".join(prov),
@@ -1166,9 +1178,8 @@ def render_nfo(d):
            "| " + _ascii(d.title).ljust(NFO_WIDTH - 4)[:NFO_WIDTH - 4] + " |",
            "+" + "-" * (NFO_WIDTH - 2) + "+",
            "",
-           "%s / %s / %.2f seconds / %d pulses"
-           % (_ascii(d.header.platform), _ascii(d.header.video),
-              d.duration, d.pulse_count),
+           "%s / %.2f seconds / %d pulses"
+           % (_ascii(timing_label(d.header)), d.duration, d.pulse_count),
            "",
            "VERIFICATION", "-" * 12]
     for c in d.checks:

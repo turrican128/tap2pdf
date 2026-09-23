@@ -56,3 +56,24 @@ def test_end_to_end_writes_a_dossier(tmp_path):
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert out.is_file() and out.stat().st_size > 2000
+
+
+def test_assumed_timing_is_marked_in_the_headline_not_only_in_the_checks():
+    # The check row said the clock was assumed, but the subtitle still read
+    # "C64 . PAL . 17.16 seconds" with full confidence, and so did the NFO.
+    # Stating an assumption as a fact in the most prominent line on the page
+    # is the exact failure this tool exists to avoid.
+    path = FIXTURES / "odd_header.tap"
+    args = tap2pdf.build_parser().parse_args([str(path)])
+    d = tap2pdf.analyse(path.read_bytes(), args)
+    assert d.header.timing_is_assumed
+    assert "assumed" in tap2pdf.render_html(d)[:1800].lower()
+    assert "assumed" in tap2pdf.render_nfo(d)[:400].lower()
+
+
+def test_a_stated_clock_is_not_labelled_assumed():
+    path = FIXTURES / "clean_single.tap"
+    args = tap2pdf.build_parser().parse_args([str(path)])
+    d = tap2pdf.analyse(path.read_bytes(), args)
+    assert not d.header.timing_is_assumed
+    assert "assumed" not in tap2pdf.render_html(d)[:1800].lower()
