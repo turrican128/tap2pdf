@@ -273,10 +273,6 @@ def _classify_hist(hist):
     return "unclassified", clusters
 
 
-def _classify_window(window):
-    return _classify_hist(histogram(window))
-
-
 # A genuine region spans many windows: a leader runs for hundreds of them, a
 # block for thousands of pulses. A run of one or two windows is not a real
 # change in what is on the tape.
@@ -1442,11 +1438,10 @@ def render_pdf(html_path, pdf_path, browser=None):
                       "still written.")
 
 
-def capture_screenshot(vice_path, tap_path):
-    """Not wired in v1.0. Its absence is reported in the dossier's
-    provenance block rather than quietly producing a document with no
-    cover image and no explanation."""
-    return None
+# The VICE title screenshot is not wired up. There is deliberately no stub
+# function for it: an empty one that returns None reads like an
+# implementation and invites someone to call it. The dossier's provenance
+# block reports the screenshot as "not used", which is the honest state.
 
 
 # -------------------------------------------------------------------- cli --
