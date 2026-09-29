@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.0.4
+
+A pre-release QA pass against real tapes, a real TAPClean report and a
+review of the decoder. Most of what it found was the dossier stating
+something untrue. **Take this version.**
+
+- **`--tapclean` never worked with a real report.** The parser looked for
+  `Loader:` and `Loader detected:`, which TAPClean does not write; its report
+  says `Loader ID   : Visiload T2`. Every real report therefore "named no
+  loader", and the dossier showed that as a **PASS**. The tests passed
+  because they were written against the same invented format. It now reads
+  the real field (report and console output), and a file that is not a
+  TAPClean report, or one whose `TAP Size` does not match the tape, is
+  refused with exit 6 instead of being ingested. `Loader ID: n/a` is a pass
+  only when no turbo region was found here either. A named loader also
+  reaches the Turbo region row, which stays NOT CHECKED - naming a loader is
+  not verifying its data.
+- **`--pdf-only -o out.pdf` left nothing on disk and exited 0.** The PDF was
+  rendered over its own HTML source, then deleted as "the intermediate
+  HTML". `-o x.nfo --nfo` likewise wrote the NFO over the HTML. Every output
+  path is now worked out before anything is written; two on one path is a
+  usage error (exit 1), except `--pdf-only` with a `.pdf` path, which now
+  means what it says. `--pdf-only` no longer announces the HTML it deletes.
+- **`--vice` made the dossier say "VICE screenshot: used".** Nothing was
+  taken - the feature is not implemented. Provenance now says "not used",
+  and the run exits 6 after writing everything else, as the exit-code table
+  promises for an unavailable enrichment.
+- **A good file could vanish from the Files table.** Any 192-byte block was
+  taken for a header, so a SEQ file's second data block, or a data block
+  whose header was lost, swallowed the next real file as its "data". Headers
+  are now recognised by length *and* type byte, SEQ files are assembled
+  from all their data blocks (and extracted as `.seq`, without a load
+  address), and a header followed by another header stays a loose block.
+- **`--extract` wrote the damaged copy when the repeat was intact.** When the
+  first copy fails its checksum and the repeat passes, the repeat's bytes
+  are used, the Files table says `ok (repeat copy)`, and extraction says so.
+  The failing block is still reported under CBM block checksums.
+- **Wrong entry points were stated as fact.** `SYS 12*4096` became SYS 12,
+  `REM SYS 1234` became SYS 1234, and a `$9E` byte inside a string was read
+  as SYS. The entry point is now taken from the raw tokens, outside strings
+  and REM, and only when it is a plain constant (`SYS 2064`, `SYS(2061)`,
+  `SYS 0`); an expression gives "no plain SYS constant found". Listings no
+  longer expand tokens inside strings or REM.
+- **`--pal` on an NTSC tape read "PAL, as stated by the header".** The check
+  now reports what the header says and, separately, the clock set on the
+  command line; the headline shows `(--pal)`. `--pal` with `--ntsc` is a
+  usage error.
+- A tape shorter than its header declares is no longer called "cosmetic":
+  data may be missing. A header end address of `$0000` is the top of memory,
+  not a range below the load address. A cruncher found in one file is no
+  longer credited to another file with the same name. A C16 signature with a
+  C64 platform byte is not a pass. TAP version 2 is refused as unsupported
+  rather than "unknown". `--max-size` must be a positive number: `inf` and
+  `nan` crashed with a traceback, `0` and negatives were accepted.
+
 ## 1.0.3
 
 The Regions table was reporting regions that did not exist.

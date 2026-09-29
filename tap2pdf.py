@@ -13,7 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -60,7 +60,7 @@ def refuse_if_too_large(size_bytes, limit_mb, what):
     if size_bytes > limit:
         raise Refusal(
             EXIT_INPUT,
-            "%s is %.1f MB, above the %d MB limit. Decoding needs roughly "
+            "%s is %.2f MB, above the %g MB limit. Decoding needs roughly "
             "130x the file size in memory, so this would likely exhaust it. "
             "Raise the limit with --max-size <MB> if you know the machine "
             "can take it." % (what, size_bytes / (1024.0 * 1024.0), limit_mb))
@@ -82,10 +82,14 @@ class TapHeader:
     video_byte: int = 0
     platform_known: bool = True
     video_known: bool = True
+    # Set when --pal/--ntsc chose the clock. Kept apart from video_known,
+    # which is only ever about what the FILE says: an override reported as
+    # "as stated by the header" puts the user's words in the file's mouth.
+    video_forced_by: object = None
 
     @property
     def timing_is_assumed(self):
-        return not self.video_known
+        return not self.video_known and not self.video_forced_by
 
 
 def parse_header(data):
@@ -96,6 +100,10 @@ def parse_header(data):
     if sig not in SIGNATURES:
         raise Refusal(EXIT_NOT_TAP, "not a TAP file: signature is %r" % sig)
     version = data[12]
+    if version == 2:
+        raise Refusal(EXIT_MALFORMED,
+                      "TAP version 2 (C16/Plus4 half-wave) is not supported "
+                      "by this version of tap2pdf")
     if version not in (0, 1):
         raise Refusal(EXIT_MALFORMED, "unknown TAP version %d" % version)
     platform_byte = data[13]
@@ -104,9 +112,14 @@ def parse_header(data):
     video = VIDEO.get(video_byte, "PAL")
     declared = struct.unpack("<I", data[16:20])[0]
     actual = len(data) - HEADER_SIZE
+    # A C16 signature with a C64 platform byte (or the reverse) is two
+    # statements that cannot both be true; neither may be shown as a pass.
+    # VIC-20 tapes carry the C64 signature, so that pairing is consistent.
+    platform_known = (platform_byte in PLATFORMS
+                      and (SIGNATURES[sig] == "C16") == (platform == "C16"))
     return TapHeader(sig, version, platform, video, declared, actual,
                      actual - declared, platform_byte, video_byte,
-                     platform_byte in PLATFORMS, video_byte in VIDEO)
+                     platform_known, video_byte in VIDEO)
 
 
 OVERFLOW_CYCLES = 255 * 8
@@ -445,12 +458,39 @@ class CbmFile:
     data_repeat: object
     missing_repeats: int
     disagreement_count: int
+    # A SEQ file carries one or more further data block pairs after the
+    # first. Empty for a PRG.
+    more_data: list = field(default_factory=list)
+    # True when `data` came from a repeat copy because the first copy failed
+    # its checksum and the repeat passed. The good bytes were on the tape,
+    # so they are the ones handed over - and the dossier says so.
+    data_from_repeat: bool = False
+    # Whether every data block `data` was taken from passes its checksum.
+    data_ok: bool = True
 
     @property
     def all_blocks(self):
+        extra = [b for pair in self.more_data for b in pair if b is not None]
         return [b for b in (self.header_block, self.data_block,
                             self.header_repeat, self.data_repeat)
-                if b is not None]
+                if b is not None] + extra
+
+    @property
+    def is_seq(self):
+        return self.ftype == 4
+
+    @property
+    def span(self):
+        """Bytes the header's range covers. An end address of $0000 is a
+        file that runs to the top of memory: the end is exclusive and 16
+        bits wide, so $10000 is written as $0000."""
+        return ((self.end or 0x10000) - self.load) & 0x1FFFF
+
+    @property
+    def sum_label(self):
+        if not self.data_ok:
+            return "bad"
+        return "ok (repeat copy)" if self.data_from_repeat else "ok"
 
     @property
     def copies_agree(self):
@@ -596,27 +636,97 @@ def _compare_copies(a, b):
     return sum(1 for x, y in zip(pa, pb) if x != y), 0
 
 
+HEADER_TYPES = (1, 3, 4)          # PRG (relocatable, fixed) and SEQ headers
+SEQ_DATA_TYPE = 2
+END_OF_TAPE_TYPE = 5
+
+
+def _best_copy(first, repeat):
+    """(block, from_repeat): the first copy, unless it fails its checksum and
+    the repeat passes."""
+    if (not first.checksum_ok and repeat is not None
+            and repeat.checksum_ok):
+        return repeat, True
+    return first, False
+
+
+def _is_header(block, repeat=None):
+    """A ROM-loader header is exactly 192 bytes and starts with a header
+    type. Length alone is not enough: a SEQ data block is also 192 bytes,
+    and 1.0.3 read one as a header and swallowed the next file as its data.
+    """
+    b, _ = _best_copy(block, repeat)
+    return (len(b.payload) == HEADER_PAYLOAD
+            and b.payload[0] in HEADER_TYPES + (END_OF_TAPE_TYPE,))
+
+
+def _is_seq_data(block, repeat=None):
+    b, _ = _best_copy(block, repeat)
+    return len(b.payload) == HEADER_PAYLOAD and b.payload[0] == SEQ_DATA_TYPE
+
+
 def build_files(pairs):
     files = []
     i = 0
-    while i + 1 < len(pairs):
+    while i < len(pairs):
         hdr_first, hdr_repeat = pairs[i]
-        if len(hdr_first.payload) < HEADER_PAYLOAD:
+        if not _is_header(hdr_first, hdr_repeat):
+            i += 1                           # a loose block: counted, not a file
+            continue
+        hdr, _ = _best_copy(hdr_first, hdr_repeat)
+        p = hdr.payload
+        ftype = p[0]
+        if ftype == END_OF_TAPE_TYPE:
             i += 1
             continue
-        p = hdr_first.payload
-        ftype = p[0]
         load = p[1] | (p[2] << 8)
         end = p[3] | (p[4] << 8)
         name = petscii_to_ascii(p[5:21])
-        data_first, data_repeat = pairs[i + 1]
         hdr_diff, hdr_missing = _compare_copies(hdr_first, hdr_repeat)
+
+        if ftype == 4:
+            # SEQ: every following type-2 block pair is data, first byte
+            # excluded. The header's addresses are the cassette buffer.
+            data_pairs = []
+            j = i + 1
+            while j < len(pairs) and _is_seq_data(*pairs[j]):
+                data_pairs.append(pairs[j])
+                j += 1
+            if not data_pairs:
+                i += 1
+                continue
+            chosen = [_best_copy(f, r) for f, r in data_pairs]
+            data = b"".join(b.payload[1:] for b, _ in chosen)
+            diffs = [_compare_copies(f, r) for f, r in data_pairs]
+            (data_first, data_repeat) = data_pairs[0]
+            files.append(CbmFile(
+                name, ftype, load, end, data, hdr_first, data_first,
+                hdr_repeat, data_repeat,
+                hdr_missing + sum(m for _, m in diffs),
+                hdr_diff + sum(d for d, _ in diffs),
+                more_data=data_pairs[1:],
+                data_from_repeat=any(r for _, r in chosen),
+                data_ok=all(b.checksum_ok for b, _ in chosen)))
+            i = j
+            continue
+
+        # PRG: the next block pair is its data - unless it is itself a
+        # header, in which case this header lost its data and stays loose.
+        if i + 1 >= len(pairs) or (_is_header(*pairs[i + 1])
+                                   and (end or 0x10000) - load
+                                   != HEADER_PAYLOAD):
+            i += 1
+            continue
+        data_first, data_repeat = pairs[i + 1]
+        chosen, from_repeat = _best_copy(data_first, data_repeat)
         data_diff, data_missing = _compare_copies(data_first, data_repeat)
-        files.append(CbmFile(name, ftype, load, end, data_first.payload,
+        files.append(CbmFile(name, ftype, load, end, chosen.payload,
                              hdr_first, data_first,
                              hdr_repeat, data_repeat,
                              hdr_missing + data_missing,
-                             hdr_diff + data_diff))
+                             hdr_diff + data_diff,
+                             data_from_repeat=from_repeat,
+                             data_ok=chosen.checksum_ok))
         i += 2
     return files
 
@@ -634,9 +744,31 @@ _TOKEN_TEXT = (
 BASIC_TOKENS = dict((0x80 + i, t) for i, t in enumerate(_TOKEN_TEXT))
 
 
+TOKEN_REM = 0x8F
+TOKEN_SYS = 0x9E
+
+
+class BasicLine(tuple):
+    """(line number, text), carrying the raw tokenised bytes alongside.
+
+    The entry point is read from the raw bytes, never from the text: in the
+    text, a SYS token and the letters S-Y-S typed after a REM look the same.
+    """
+
+    def __new__(cls, number, text, raw=b""):
+        line = super().__new__(cls, (number, text))
+        line.raw = raw
+        return line
+
+
 def detokenize(data, load=0x0801):
     """Lines are [next-line pointer][line number][tokens][$00]; a next-line
-    pointer of $0000 ends the program."""
+    pointer of $0000 ends the program.
+
+    Inside a string or after REM, bytes are literal, not tokens - the BASIC
+    interpreter never expands them there. Anything unprintable in those
+    stretches is shown as {XX} rather than as a keyword it is not.
+    """
     lines = []
     i = 0
     while i + 4 <= len(data):
@@ -645,29 +777,76 @@ def detokenize(data, load=0x0801):
             break
         number = data[i + 2] | (data[i + 3] << 8)
         i += 4
+        start = i
         out = []
+        literal = False                          # inside quotes
+        rem = False
         while i < len(data) and data[i]:
             b = data[i]
-            out.append(BASIC_TOKENS.get(b, chr(b) if 32 <= b < 127 else "."))
+            if literal or rem:
+                out.append(chr(b) if 32 <= b < 127 else "{%02X}" % b)
+            else:
+                out.append(BASIC_TOKENS.get(
+                    b, chr(b) if 32 <= b < 127 else "."))
+                rem = b == TOKEN_REM
+            if b == 0x22 and not rem:
+                literal = not literal
             i += 1
+        lines.append(BasicLine(number, "".join(out), bytes(data[start:i])))
         i += 1                                   # the line's terminating $00
-        lines.append((number, "".join(out)))
     return lines
 
 
+def _sys_constant(raw, j):
+    """The address after a SYS token at raw[j], or None unless it is a plain
+    constant ending the statement. SYS 12*4096 or SYS PEEK(43) is an
+    expression this tool does not evaluate, and taking the leading digits
+    of one states a wrong address as fact."""
+    n = len(raw)
+
+    def skip(k):
+        while k < n and raw[k] == 0x20:
+            k += 1
+        return k
+
+    j = skip(j)
+    paren = j < n and raw[j] == 0x28
+    if paren:
+        j = skip(j + 1)
+    digits = ""
+    while j < n and (0x30 <= raw[j] <= 0x39 or (digits and raw[j] == 0x20)):
+        if raw[j] != 0x20:                      # BASIC ignores spaces in numbers
+            digits += chr(raw[j])
+        j += 1
+    if not digits:
+        return None
+    j = skip(j)
+    if paren:
+        if j >= n or raw[j] != 0x29:
+            return None
+        j = skip(j + 1)
+    if j < n and raw[j] != 0x3A:                # anything but end or ':'
+        return None
+    value = int(digits)
+    return value if value <= 0xFFFF else None
+
+
 def find_sys(lines):
-    for _number, text in lines:
-        at = text.find("SYS")
-        if at < 0:
-            continue
-        digits = ""
-        for ch in text[at + 3:]:
-            if ch.isdigit():
-                digits += ch
-            elif digits or ch != " ":
+    """The address of the first SYS the program reaches, when it is a plain
+    constant. Only the first: if that one is an expression, a later SYS is
+    not the entry point either, so the answer is None rather than a guess."""
+    for line in lines:
+        raw = getattr(line, "raw", b"")
+        literal = False
+        for j, b in enumerate(raw):
+            if b == 0x22:
+                literal = not literal
+            elif literal:
+                continue
+            elif b == TOKEN_REM:
                 break
-        if digits:
-            return int(digits)
+            elif b == TOKEN_SYS:
+                return _sys_constant(raw, j + 1)
     return None
 
 
@@ -737,36 +916,59 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
         "%s, version %d" % (header.signature.decode("ascii"),
                             header.version)))
 
+    forced = ""
+    if header.video_forced_by:
+        forced = (". Durations use %s timing, set by %s on the command line"
+                  % (header.video, header.video_forced_by))
     if header.platform_known and header.video_known:
         checks.append(Check(
             "Header platform and timing", PASS,
-            "%s, %s, as stated by the header" % (header.platform,
-                                                 header.video)))
+            "%s, %s, as stated by the header%s"
+            % (header.platform, VIDEO[header.video_byte], forced)))
     else:
         unknown = []
-        if not header.platform_known:
+        if header.platform_byte not in PLATFORMS:
             unknown.append("platform byte $%02X names no known machine"
                            % header.platform_byte)
+        elif not header.platform_known:
+            unknown.append("the %s signature contradicts platform byte $%02X "
+                           "(%s)" % (header.signature.decode("ascii"),
+                                     header.platform_byte, header.platform))
         if not header.video_known:
             unknown.append("video byte $%02X names neither PAL nor NTSC"
                            % header.video_byte)
+        if header.video_forced_by:
+            tail = forced[2:] + "."
+        else:
+            tail = ("Every duration in this document is therefore computed "
+                    "from an assumed %s %s clock, not from anything the file "
+                    "states. Override with --pal or --ntsc if you know better."
+                    % (header.platform, header.video))
         checks.append(Check(
             "Header platform and timing", NOT_CHECKED,
-            "%s. Every duration in this document is therefore computed from "
-            "an assumed %s %s clock, not from anything the file states. "
-            "Override with --pal or --ntsc if you know better."
-            % ("; ".join(unknown), header.platform, header.video)))
+            "%s. %s" % ("; ".join(unknown), tail)))
 
     if header.length_mismatch == 0:
         checks.append(Check(
             "Header length vs actual data", PASS,
             "declared %d bytes, file holds %d"
             % (header.declared_length, header.actual_length)))
-    else:
+    elif header.length_mismatch > 0:
         checks.append(Check(
             "Header length vs actual data", FAIL,
             "header says %d bytes, file holds %d (%+d). Cosmetic; repairable "
             "with `tapclean -rs`."
+            % (header.declared_length, header.actual_length,
+               header.length_mismatch)))
+    else:
+        # Fewer bytes than declared is not cosmetic: either the end of the
+        # recording is missing, or the header is wrong, and nothing in the
+        # file says which.
+        checks.append(Check(
+            "Header length vs actual data", FAIL,
+            "header says %d bytes, file holds %d (%+d). Data may be missing "
+            "from the end of the file, or the header is wrong; the file "
+            "alone cannot say which."
             % (header.declared_length, header.actual_length,
                header.length_mismatch)))
 
@@ -850,24 +1052,34 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
             # The header states a load and an end address; the data block
             # carries the bytes. Printing both without checking they agree
             # puts two numbers in the dossier that cannot both be true.
+            # SEQ headers carry the cassette buffer's addresses, not a range
+            # the data occupies, so there is nothing of theirs to compare.
+            prgs = [f for f in files if not f.is_seq]
             wrong = []
-            for f in files:
-                if f.end < f.load:
+            for f in prgs:
+                label = f.name or "(unnamed)"
+                if f.end != 0 and f.end < f.load:
                     wrong.append("%s: header end $%04X is below its load "
-                                 "address $%04X" % (f.name, f.end, f.load))
-                elif (f.end - f.load) != f.size:
+                                 "address $%04X" % (label, f.end, f.load))
+                elif f.span != f.size:
                     wrong.append("%s: header claims %d bytes ($%04X-$%04X), "
                                  "%d recovered"
-                                 % (f.name, f.end - f.load, f.load, f.end,
-                                    f.size))
+                                 % (label, f.span, f.load, f.end, f.size))
+            seq_note = ("; %d SEQ file(s) carry no address range to check"
+                        % (len(files) - len(prgs))) if len(prgs) < len(files) \
+                else ""
             if wrong:
                 checks.append(Check("File length vs header range", FAIL,
-                                    "; ".join(wrong)))
-            else:
+                                    "; ".join(wrong) + seq_note))
+            elif prgs:
                 checks.append(Check(
                     "File length vs header range", PASS,
-                    "all %d file(s) carry exactly the bytes their header "
-                    "declares" % len(files)))
+                    "all %d PRG file(s) carry exactly the bytes their header "
+                    "declares%s" % (len(prgs), seq_note)))
+            else:
+                checks.append(Check(
+                    "File length vs header range", NOT_CHECKED,
+                    seq_note[2:]))
 
         parity = sum(b.parity_errors for b in all_blocks)
         checks.append(Check(
@@ -877,11 +1089,18 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
 
     turbo = [r for r in regions if r.kind == "turbo"]
     if turbo:
+        if loaders:
+            why = ("TAPClean names the loader (%s), but tap2pdf has no "
+                   "checksum model for it, so this data was not verified "
+                   "here. TAPClean's own report carries its checksum test."
+                   % ", ".join(loaders))
+        else:
+            why = ("The format is unidentified, so there is no checksum "
+                   "model to verify them against.")
         checks.append(Check(
             "Turbo region integrity", NOT_CHECKED,
-            "%d turbo region(s), %d pulses. The format is unidentified, so "
-            "there is no checksum model to verify them against."
-            % (len(turbo), sum(r.pulse_count for r in turbo))))
+            "%d turbo region(s), %d pulses. %s"
+            % (len(turbo), sum(r.pulse_count for r in turbo), why)))
 
     # Measured from the raw per-window verdicts, not from the merged table.
     # Merging is what makes the Regions table readable, but it must not be
@@ -897,13 +1116,24 @@ def build_checks(header, pulses, regions, files, tapclean_used, loaders=None,
             "them." % (raw_unclassified,
                        100.0 * raw_unclassified / max(1, total_pulses))))
 
-    if tapclean_used:
-        named = ", ".join(loaders) if loaders else ""
+    if tapclean_used and loaders:
         checks.append(Check(
             "Loader identification", PASS,
-            ("identified from the supplied TAPClean report: " + named)
-            if named
-            else "the supplied TAPClean report names no loader"))
+            "identified from the supplied TAPClean report: "
+            + ", ".join(loaders)))
+    elif tapclean_used and not turbo:
+        # Two independent readings agree: TAPClean found no turbo loader,
+        # and no turbo region was found here either.
+        checks.append(Check(
+            "Loader identification", PASS,
+            "the supplied TAPClean report names no turbo loader, and none "
+            "of this tape was classified as turbo: the CBM ROM loader only"))
+    elif tapclean_used:
+        checks.append(Check(
+            "Loader identification", NOT_CHECKED,
+            "the supplied TAPClean report names no loader, but %d turbo "
+            "region(s) were found here, so the loader remains unidentified"
+            % len(turbo)))
     else:
         checks.append(Check(
             "Loader identification", NOT_CHECKED,
@@ -1055,9 +1285,9 @@ def memory_map_svg(files, width=880, height=176):
                      '</text>' % (start * scale + 3, bar_y + bar_h - 5, label))
     parts.append('<rect x="0" y="%d" width="%d" height="%d" fill="none" '
                  'stroke="#c8ccd2"/>' % (bar_y, width, bar_h))
-    for i, f in enumerate(files):
+    for i, f in enumerate(fl for fl in files if not fl.is_seq):
         x = f.load * scale
-        w = max(2.0, (f.end - f.load) * scale)
+        w = max(2.0, min(f.span, 0x10000 - f.load) * scale)
         row = i % 2
         parts.append('<rect x="%.2f" y="%d" width="%.2f" height="%d" '
                      'fill="#3f8f5c" fill-opacity="0.85">'
@@ -1103,27 +1333,29 @@ def analyse(data, args):
     header = parse_header(data)
     if getattr(args, "pal", False):
         header.video = "PAL"
-        header.video_known = True       # the user asserted it on the command line
+        header.video_forced_by = "--pal"
     elif getattr(args, "ntsc", False):
         header.video = "NTSC"
-        header.video_known = True
+        header.video_forced_by = "--ntsc"
     pulses = decode_pulses(data, header)
     seg_stats = {}
     regions = segment(pulses, seg_stats)
     blocks = decode_cbm_blocks(pulses)
     files = build_files(pair_blocks(blocks))
     sys_entry = None
+    # Keyed by position in `files`, not by name: two files on one tape can
+    # share a name, and a cruncher found in one is not in the other.
     packers = {}
-    for f in files:
-        if f.load == 0x0801 and sys_entry is None:
+    for i, f in enumerate(files):
+        if f.load == 0x0801 and f.ftype in (1, 3) and sys_entry is None:
             sys_entry = find_sys(detokenize(f.data))
         found = identify_packer(f.data, f.load)
         if found:
-            packers[f.name] = found
+            packers[i] = found
     report_path = getattr(args, "tapclean", None)
     loaders = []
     if report_path:
-        loaders = read_tapclean_report(report_path)["loaders"]
+        loaders = read_tapclean_report(report_path, len(data))["loaders"]
     checks = build_checks(header, pulses, regions, files,
                           tapclean_used=bool(report_path), loaders=loaders,
                           blocks=blocks, seg_stats=seg_stats)
@@ -1137,7 +1369,9 @@ def analyse(data, args):
         pulse_count=len(pulses),
         enrichments={
             "TAPClean report": bool(getattr(args, "tapclean", None)),
-            "VICE screenshot": bool(getattr(args, "vice", None)),
+            # Never true until a screenshot is actually taken. Asking for one
+            # with --vice is not the same as having one.
+            "VICE screenshot": False,
         })
 
 
@@ -1181,6 +1415,9 @@ def timing_label(header):
     plainly in the headline while only the check table admits it was guessed
     states an assumption as a fact in the most prominent line on the page.
     """
+    if header.video_forced_by:
+        return "%s, %s (%s)" % (header.platform, header.video,
+                                header.video_forced_by)
     if header.timing_is_assumed:
         return "%s, %s (assumed)" % (header.platform, header.video)
     return "%s, %s" % (header.platform, header.video)
@@ -1195,8 +1432,8 @@ def render_html(d):
                _h(c.detail)))
 
     file_rows = []
-    for f in d.files:
-        packer = d.packers.get(f.name)
+    for i, f in enumerate(d.files):
+        packer = d.packers.get(i)
         note = ("%s at +%d" % (packer["name"], packer["offset"])) if packer \
             else ""
         file_rows.append(
@@ -1204,8 +1441,7 @@ def render_html(d):
             '<td class="num">$%04X</td><td class="num">%d</td>'
             '<td class="%s">%s</td><td>%s</td></tr>'
             % (_h(f.name), _h(f.type_name), f.load, f.end, f.size,
-               "PASS" if f.data_block.checksum_ok else "FAIL",
-               "ok" if f.data_block.checksum_ok else "bad", _h(note)))
+               "PASS" if f.data_ok else "FAIL", _h(f.sum_label), _h(note)))
     if not file_rows:
         file_rows.append('<tr><td colspan="7">No CBM ROM-loader files were '
                          'recovered from this tape.</td></tr>')
@@ -1225,8 +1461,9 @@ def render_html(d):
         prov.append("<li>%s: %s</li>"
                     % (_h(name), "used" if used else "not used"))
 
-    entry = ("$%04X (SYS %d)" % (d.sys_entry, d.sys_entry)) if d.sys_entry \
-        else "not found in a BASIC stub"
+    entry = ("$%04X (SYS %d)" % (d.sys_entry, d.sys_entry)) \
+        if d.sys_entry is not None \
+        else "no plain SYS constant found in a BASIC stub"
 
     screenshot = ""
     if d.screenshot_data_uri:
@@ -1313,11 +1550,10 @@ def render_nfo(d):
         for f in d.files:
             out.append("%-17s %-20s $%04X  $%04X  %7d %s"
                        % (_ascii(f.name)[:17], _ascii(f.type_name)[:20],
-                          f.load, f.end, f.size,
-                          "ok" if f.data_block.checksum_ok else "BAD"))
+                          f.load, f.end, f.size, _ascii(f.sum_label)))
     else:
         out.append("(no CBM ROM-loader files were recovered)")
-    if d.sys_entry:
+    if d.sys_entry is not None:
         out += ["", "Entry point: $%04X (SYS %d)" % (d.sys_entry, d.sys_entry)]
     out += ["",
             "Generated by tap2pdf " + __version__ + ".",
@@ -1336,8 +1572,9 @@ def extract_files(d, directory, tape_path=None):
     targets = []
     for i, f in enumerate(d.files):
         safe = "".join(ch if ch.isalnum() else "_" for ch in f.name) or "file"
-        targets.append((f, os.path.join(directory,
-                                        "%02d_%s.prg" % (i + 1, safe))))
+        targets.append((f, os.path.join(
+            directory, "%02d_%s.%s" % (i + 1, safe,
+                                       "seq" if f.is_seq else "prg"))))
     if tape_path is not None:
         for _f, path in targets:
             refuse_if_clobbers_input(path, tape_path, "extracted file")
@@ -1346,7 +1583,8 @@ def extract_files(d, directory, tape_path=None):
     for f, path in targets:
         try:
             with open(path, "wb") as fh:
-                fh.write(bytes([f.load & 0xFF, (f.load >> 8) & 0xFF]))
+                if not f.is_seq:             # a SEQ file has no load address
+                    fh.write(bytes([f.load & 0xFF, (f.load >> 8) & 0xFF]))
                 fh.write(f.data)
         except OSError as exc:
             raise Refusal(EXIT_OUTPUT, "cannot write %s: %s" % (path, exc))
@@ -1366,30 +1604,74 @@ BROWSER_CANDIDATES = [
 ]
 
 
+TAPCLEAN_NO_LOADER = ("n/a", "none", "unknown", "-")
+
+
+def _field(line, name):
+    """The value of a 'Name   : value' line, or None. Matches TAPClean's
+    report (tcreport.txt, 'Loader ID   : Visiload T2') and its console
+    output ('  Loader ID: Visiload T2.')."""
+    key, sep, value = line.partition(":")
+    if not sep or " ".join(key.split()).lower() != name:
+        return None
+    return value.strip().rstrip(".").strip()
+
+
 def parse_tapclean_report(text):
-    """Tolerant of format drift: it scans for loader names and never raises
-    on a line it does not understand."""
+    """What a TAPClean report says, taken from the fields TAPClean really
+    writes.
+
+    1.0.3 looked for 'Loader:' and 'Loader detected:', which TAPClean never
+    writes. A real report named no loader to it, and the dossier said so as
+    a PASS - a false statement on every tape it was ever given.
+    """
     loaders = []
     lines = []
+    said_none = False
+    tap_size = None
+    is_tapclean = False
     for raw in str(text).splitlines():
         lines.append(raw)
-        low = raw.lower()
-        for marker in ("loader detected:", "loader:"):
-            if marker in low:
-                name = raw[low.index(marker) + len(marker):].strip()
-                if name and name not in loaders:
-                    loaders.append(name)
-                break
-    return {"loaders": loaders, "raw_lines": lines}
+        if "tapclean" in raw.lower():
+            is_tapclean = True
+        value = _field(raw, "loader id")
+        if value is not None:
+            if value.lower() in TAPCLEAN_NO_LOADER or not value:
+                said_none = True
+            elif value not in loaders:
+                loaders.append(value)
+        size = _field(raw, "tap size")
+        if size is not None and size.split() and size.split()[0].isdigit():
+            tap_size = int(size.split()[0])
+    return {"loaders": loaders, "says_no_loader": said_none and not loaders,
+            "tap_size": tap_size, "is_tapclean": is_tapclean,
+            "raw_lines": lines}
 
 
-def read_tapclean_report(path):
+def read_tapclean_report(path, tape_size=None):
+    """A report that is not recognisably TAPClean's, or that describes a
+    tape of a different size, is refused: ingesting it would put another
+    file's findings - or none - into this tape's dossier."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            return parse_tapclean_report(fh.read())
+            report = parse_tapclean_report(fh.read())
     except OSError as exc:
         raise Refusal(EXIT_ENRICH,
                       "cannot read the TAPClean report %s: %s" % (path, exc))
+    if not report["is_tapclean"] or not (report["loaders"]
+                                         or report["says_no_loader"]):
+        raise Refusal(EXIT_ENRICH,
+                      "%s does not look like a TAPClean report: it has no "
+                      "'Loader ID' line. Generate one with `tapclean -t "
+                      "<tape>` and pass the tcreport.txt it writes."
+                      % path)
+    if (tape_size is not None and report["tap_size"] is not None
+            and report["tap_size"] != tape_size):
+        raise Refusal(EXIT_ENRICH,
+                      "the TAPClean report %s is for a different tape: it "
+                      "describes %d bytes, this tape is %d"
+                      % (path, report["tap_size"], tape_size))
+    return report
 
 
 def find_browser(explicit=None):
@@ -1457,6 +1739,19 @@ class _Parser(argparse.ArgumentParser):
         super().exit(EXIT_USAGE if status == 2 else status)
 
 
+def _positive_mb(text):
+    """--max-size: a finite number above zero. 'inf' and 'nan' parse as
+    floats and then crashed the size check with a traceback."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("not a number: %r" % text)
+    if not (0 < value < float("inf")):
+        raise argparse.ArgumentTypeError(
+            "must be a size in MB above zero, got %r" % text)
+    return value
+
+
 def build_parser():
     p = _Parser(
         prog="tap2pdf",
@@ -1476,12 +1771,14 @@ def build_parser():
                    help="headless Edge/Chrome to use for --pdf")
     p.add_argument("--extract", metavar="DIR",
                    help="write the recovered PRGs here")
-    p.add_argument("--max-size", type=float, default=DEFAULT_MAX_INPUT_MB,
-                   metavar="MB",
+    p.add_argument("--max-size", type=_positive_mb,
+                   default=DEFAULT_MAX_INPUT_MB, metavar="MB",
                    help="refuse an input larger than this (default %d MB)"
                         % DEFAULT_MAX_INPUT_MB)
-    p.add_argument("--pal", action="store_true", help="force PAL timing")
-    p.add_argument("--ntsc", action="store_true", help="force NTSC timing")
+    clock = p.add_mutually_exclusive_group()
+    clock.add_argument("--pal", action="store_true", help="force PAL timing")
+    clock.add_argument("--ntsc", action="store_true",
+                       help="force NTSC timing")
     p.add_argument("--title", help="override the document title")
     p.add_argument("--quiet", action="store_true",
                    help="no progress on stderr")
@@ -1537,6 +1834,46 @@ def _write_text(path, text):
         raise Refusal(EXIT_OUTPUT, "cannot write %s: %s" % (path, exc))
 
 
+def plan_outputs(args):
+    """(html, nfo or None, pdf or None), every one checked before anything
+    is written.
+
+    The NFO and PDF sit beside the HTML under its stem. In 1.0.3 that meant
+    `-o x.nfo --nfo` wrote the HTML and then the NFO over it, and
+    `--pdf-only -o x.pdf` rendered the PDF over its own source and then
+    deleted it - exit 0, nothing on disk. Two outputs on one path is now a
+    usage error, except for the one case where the intent is plain:
+    --pdf-only with a .pdf path names the PDF itself.
+    """
+    out = args.output or default_output(args.tape)
+    pdf_path = None
+    if args.pdf_only and out.lower().endswith(".pdf"):
+        pdf_path = out
+        html_path = os.path.splitext(out)[0] + ".tap2pdf-tmp.html"
+    else:
+        html_path = out
+        if args.pdf or args.pdf_only:
+            pdf_path = os.path.splitext(html_path)[0] + ".pdf"
+    nfo_path = (os.path.splitext(pdf_path or html_path)[0] + ".nfo"
+                if args.nfo else None)
+
+    named = [("HTML dossier", html_path), ("NFO", nfo_path),
+             ("PDF", pdf_path)]
+    named = [(what, p) for what, p in named if p]
+    for what, p in named:
+        refuse_if_clobbers_input(p, args.tape, what)
+    for i, (what_a, a) in enumerate(named):
+        for what_b, b in named[i + 1:]:
+            if _same_path(a, b):
+                raise Refusal(
+                    EXIT_USAGE,
+                    "the %s and the %s would both be written to %s. -o names "
+                    "the HTML dossier; the NFO and PDF are written beside it "
+                    "as <name>.nfo and <name>.pdf. Give -o a .html path."
+                    % (what_a, what_b, a))
+    return html_path, nfo_path, pdf_path
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
@@ -1552,15 +1889,12 @@ def main(argv=None):
 
         dossier = analyse(data, args)
 
-        html_path = args.output or default_output(args.tape)
-        refuse_if_clobbers_input(html_path, args.tape, "HTML dossier")
+        html_path, nfo_path, pdf_path = plan_outputs(args)
         _write_text(html_path, render_html(dossier))
-        if not args.quiet:
+        if not args.quiet and not args.pdf_only:
             sys.stderr.write("wrote %s\n" % html_path)
 
-        if args.nfo:
-            nfo_path = os.path.splitext(html_path)[0] + ".nfo"
-            refuse_if_clobbers_input(nfo_path, args.tape, "NFO")
+        if nfo_path:
             _write_text(nfo_path, render_nfo(dossier))
             if not args.quiet:
                 sys.stderr.write("wrote %s\n" % nfo_path)
@@ -1570,11 +1904,35 @@ def main(argv=None):
             if not args.quiet:
                 sys.stderr.write("extracted %d file(s) to %s\n"
                                  % (len(written), args.extract))
+                for f, path in zip(dossier.files, written):
+                    if f.data_from_repeat:
+                        sys.stderr.write(
+                            "  %s: taken from the repeat copy - the first "
+                            "copy fails its checksum\n"
+                            % os.path.basename(path))
+                    elif not f.data_ok:
+                        sys.stderr.write(
+                            "  %s: fails its checksum in every copy on the "
+                            "tape; written as recorded\n"
+                            % os.path.basename(path))
 
-        if args.pdf or args.pdf_only:
-            pdf_path = os.path.splitext(html_path)[0] + ".pdf"
-            refuse_if_clobbers_input(pdf_path, args.tape, "PDF")
-            render_pdf(html_path, pdf_path, args.browser)
+        if pdf_path:
+            try:
+                render_pdf(html_path, pdf_path, args.browser)
+            except Refusal as r:
+                if args.pdf_only:
+                    # The HTML was only ever a step towards the PDF, but
+                    # with no PDF it is the one result there is: keep it
+                    # where it can be found, under its own name.
+                    kept = os.path.splitext(pdf_path)[0] + ".html"
+                    if (not os.path.exists(kept)
+                            and not _same_path(kept, args.tape)):
+                        os.replace(html_path, kept)
+                        html_path = kept
+                    r.message = r.message.replace(
+                        "The HTML dossier was still written.",
+                        "The HTML dossier was kept as %s." % html_path)
+                raise
             if not args.quiet:
                 sys.stderr.write("wrote %s\n" % pdf_path)
             if args.pdf_only:
@@ -1586,6 +1944,13 @@ def main(argv=None):
         for check in dossier.checks:
             if check.result == FAIL and not args.quiet:
                 sys.stderr.write("  %s: %s\n" % (check.name, check.detail))
+
+        if args.vice:
+            raise Refusal(
+                EXIT_ENRICH,
+                "--vice was requested, but the VICE title screenshot is not "
+                "implemented in this version. Everything else was written; "
+                "the dossier's provenance says the screenshot was not used.")
 
         return EXIT_OK
     except Refusal as r:

@@ -8,13 +8,15 @@ import tap2pdf
 
 
 def test_a_tapclean_report_yields_loader_names():
-    text = ("TAPClean 0.39\n"
-            "Loader detected: Novaload\n"
+    # The field TAPClean really writes. 1.0.3 was tested against an invented
+    # "Loader detected:" line and never matched a real report.
+    text = ("TAPClean version: 0.39-pre-7\n"
+            "TAP Size    : 788700 bytes (770 kB)\n"
             "Something else entirely\n"
-            "Loader detected: Turbotape 250\n")
+            "Loader ID   : Visiload T2\n")
     got = tap2pdf.parse_tapclean_report(text)
-    assert "Novaload" in got["loaders"]
-    assert "Turbotape 250" in got["loaders"]
+    assert got["loaders"] == ["Visiload T2"]
+    assert got["tap_size"] == 788700
 
 
 def test_an_unexpected_report_format_does_not_raise():
@@ -24,8 +26,11 @@ def test_an_unexpected_report_format_does_not_raise():
 
 def test_a_supplied_report_turns_loader_identification_into_a_pass(tmp_path):
     report = tmp_path / "report.txt"
-    report.write_text("Loader detected: Novaload\n", encoding="utf-8")
     path = FIXTURES / "clean_single.tap"
+    report.write_text("TAPClean version: 0.39-pre-7\n"
+                      "TAP Size    : %d bytes\n"
+                      "Loader ID   : Novaload\n" % path.stat().st_size,
+                      encoding="utf-8")
     args = tap2pdf.build_parser().parse_args(
         [str(path), "--tapclean", str(report)])
     d = tap2pdf.analyse(path.read_bytes(), args)

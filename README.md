@@ -24,16 +24,20 @@ Block structure                PASS
 First copy vs repeat           PASS
     all 1 file(s) agree
 File length vs header range    PASS
-    all 1 file(s) carry exactly the bytes their header declares
+    all 1 PRG file(s) carry exactly the bytes their header declares
 Byte parity                    PASS
     no parity errors
 Turbo region integrity         NOT CHECKED
-    11 turbo region(s), 731812 pulses. The format is unidentified, so there
-    is no checksum model to verify them against.
+    1 turbo region(s), 735908 pulses. The format is unidentified, so there is
+    no checksum model to verify them against.
+Unclassified stretches         NOT CHECKED
+    256 pulses (0.0% of the tape) match no pulse pattern this tool
+    recognises. They are folded into neighbouring regions in the table above
+    so it stays readable, but nothing here analysed them.
 Loader identification          NOT CHECKED
     no loader names available: run with `--tapclean <report>` to identify
     them
-    [two further NOT CHECKED rows trimmed for this README]
+    [one further NOT CHECKED row trimmed for this README]
 
 FILES
 -----
@@ -122,7 +126,8 @@ The HTML is one self-contained file: no external requests, SVG inline, and a pri
 Being straight about this is the point of the tool, so it is in the README too:
 
 - **Turbo loader data is not verified.** tap2pdf reads the CBM ROM-loader portion of a tape properly — checksums, parity, both recorded copies. For turbo data it can tell you the pulse clusters, block count and timing, but there is no checksum model for a format it has not identified.
-- **Loaders are not named without help.** Pass `--tapclean <report>` to get names from [TAPClean](https://github.com/Chesterbr/tapclean), which knows 130+ of them. Without it, regions are described by their pulse signature.
+- **Loaders are not named without help.** Run [TAPClean](https://github.com/Chesterbr/tapclean) on the tape first (`tapclean -t mytape.tap` writes `tcreport.txt`), then pass `--tapclean tcreport.txt`. TAPClean knows 130+ loaders; on *The Human Race* it gives `Loader identification  PASS  identified from the supplied TAPClean report: Visiload T2`. Without it, regions are described by their pulse signature. A file that is not a TAPClean report, or a report whose `TAP Size` does not match the tape, is refused with exit 6 rather than ingested.
+- **A named loader is still not a verified one.** TAPClean's name for a turbo loader goes into the dossier, but tap2pdf has no checksum model for turbo data, so that row stays NOT CHECKED. TAPClean's own report carries its checksum test.
 - **Crunchers are only reported when a signature is compiled in.** One ships today, for Exomizer 3.x `sfx sys`. Signatures are never written from memory: each is derived from a file crunched locally, and kept only if it stays identical across several differently-sized samples. When nothing matches, the dossier says no known cruncher was recognised — **not** that the file is uncrunched.
 - **It is not TAPClean.** TAPClean tests, cleans and repairs tapes. tap2pdf explains one. Use both.
 
@@ -133,14 +138,17 @@ tap2pdf <tape.tap> [options]
 
   -o, --output <path>     output HTML path (default: <tape>-dossier.html)
       --pdf               also render a PDF next to the HTML
-      --pdf-only          render the PDF and remove the intermediate HTML
+      --pdf-only          render the PDF and remove the intermediate HTML;
+                          -o may then name the .pdf itself
       --nfo               also write a plain-ASCII .nfo, for a release
       --tapclean <file>   ingest a TAPClean report for named loader IDs
-      --vice <path>       x64sc, for a title screenshot (not wired up yet)
+      --vice <path>       x64sc, for a title screenshot - not implemented
+                          yet: everything else is written, then exit 6
       --browser <path>    headless Edge/Chrome to use for --pdf
       --extract <dir>     write the recovered PRGs here
       --max-size <MB>     refuse an input larger than this (default 16)
-      --pal / --ntsc      clock for time calculations (default: from the file)
+      --pal / --ntsc      clock for time calculations (default: from the file);
+                          the dossier marks the clock as set on the command line
       --title <text>      override the document title
       --quiet             suppress the progress lines on stderr
       --version
@@ -153,7 +161,7 @@ tap2pdf <tape.tap> [options]
 | Code | Meaning |
 |---|---|
 | 0 | dossier written |
-| 1 | usage error |
+| 1 | usage error — including two outputs that would land on one path (`-o x.nfo --nfo`) |
 | 2 | input unreadable |
 | 3 | not a TAP file |
 | 4 | malformed TAP — refused |

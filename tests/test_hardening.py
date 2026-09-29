@@ -95,7 +95,7 @@ def test_an_absurdly_large_input_is_refused_before_it_is_decoded(tmp_path):
     big.write_bytes(b"C64-TAPE-RAW" + bytes([1, 0, 0, 0])
                     + struct.pack("<I", 8) + b"\x30" * 8)
     r = subprocess.run([sys.executable, str(ROOT / "tap2pdf.py"), str(big),
-                        "--max-size", "0"],
+                        "--max-size", "0.00001"],
                        capture_output=True, text=True)
     assert r.returncode == tap2pdf.EXIT_INPUT
     assert "--max-size" in r.stderr

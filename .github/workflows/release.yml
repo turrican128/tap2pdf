@@ -143,6 +143,15 @@ jobs:
           done
           echo "zip contents verified"
 
+      - name: release notes are this version's changelog entry only
+        # body_path used to be the whole CHANGELOG, so every release page
+        # carried every version's history. Take the first "## " section.
+        run: |
+          awk '/^## /{n++} n==1' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          head -1 release-notes.md | grep -qxF "## ${VERSION}" \
+            || { echo "::error::CHANGELOG.md does not start with ## ${VERSION}"; exit 1; }
+
       - name: publish the release
         # Pinned to the commit v2 pointed at on 2026-09-23. A mutable tag on
         # a third-party action is the one that matters here: whoever owns it
@@ -153,7 +162,7 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           name: tap2pdf ${{ env.VERSION }}
-          body_path: CHANGELOG.md
+          body_path: release-notes.md
           # A tag with a suffix (v1.0-rc1) is a trial run, not a release.
           # Without this it publishes as the repo's latest release and anyone
           # landing on the page downloads a release candidate.

@@ -1,4 +1,4 @@
-# CSDb submission — tap2pdf 1.0.1
+# CSDb submission — tap2pdf 1.0.4
 
 Everything needed to fill in the "Add release" form at
 <https://csdb.dk/additem.php?type=release>. Same shape as the txt2dirart 1.0.2
@@ -13,7 +13,7 @@ that works on C64 files.
 
 | field | value |
 |---|---|
-| **Name** | `tap2pdf 1.0.1` |
+| **Name** | `tap2pdf 1.0.4` |
 | **Type** | `Other Platform C64 Tool` — same category txt2dirart went under. Confirm the exact wording in the dropdown; CSDb renames these occasionally. |
 | **Released by** | DR.J / Delysid |
 | **Release date** | the day you submit |
@@ -37,8 +37,8 @@ since they own the tapes that would break it.
 
 Upload both, in this order:
 
-1. **`tap2pdf-1.0.1.zip`** — from the GitHub release page, not built locally.
-   14.2 MB. Contains `tap2pdf.exe` (Windows), `tap2pdf` (Linux),
+1. **`tap2pdf-1.0.4.zip`** — from the GitHub release page, not built locally.
+   About 14 MB. Contains `tap2pdf.exe` (Windows), `tap2pdf` (Linux),
    `tap2pdf.py` (the source, one file, stdlib only), README, CHANGELOG,
    LICENSE, `examples/` with a tape and the dossier it produces, and
    `tools/qa_sweep.py` for checking a whole archive.
@@ -97,8 +97,8 @@ detokenized out of the BASIC stub.
 It never names a loader it has not established. Without a TAPClean report an
 unrecognised turbo region is described by its pulse clusters and block count,
 not guessed at -- a dossier that confidently names the wrong loader is worse
-than one that admits it does not know. Pass --tapclean <report> and it will
-use those names.
+than one that admits it does not know. Run TAPClean first and pass its
+report with --tapclean tcreport.txt, and the dossier names the loader.
 
 It does not modify your tape: the file is opened read-only and never written.
 It is not TAPClean and does not replace it. TAPClean tests, cleans and repairs
@@ -112,8 +112,8 @@ Command line, no GUI, no dependencies. Single-file binaries for Windows and
 Linux; the Python source is one file and imports nothing outside the standard
 library.
 
-Verified against 49 commercial tapes with no crashes. 1.0.1 fixes checks
-that could report a clean result without having run; see the CHANGELOG.
+Verified against 49 commercial tapes with no crashes. 1.0.4 is the first
+release checked against a real TAPClean report; see the CHANGELOG.
 
 Source and full documentation:
 https://github.com/turrican128/tap2pdf
@@ -123,10 +123,10 @@ https://github.com/turrican128/tap2pdf
 
 ## Before you submit — checklist
 
-- [ ] The GitHub release `v1.0.1` exists and its build was green on both platforms
+- [ ] The GitHub release `v1.0.4` exists and its build was green on both platforms
 - [ ] You downloaded the zip **from the release page** and ran **both** binaries
       once on a real machine, not just in CI
-- [ ] `tap2pdf --version` prints `tap2pdf 1.0.1` — not 1.0 and not a `-dev` version
+- [ ] `tap2pdf --version` prints `tap2pdf 1.0.4` — not 1.0 and not a `-dev` version
 - [ ] You generated `example-dossier.pdf` and opened it; the tables are not cut
       across page breaks
 - [ ] You made the screenshot, and the verification report is visible in it

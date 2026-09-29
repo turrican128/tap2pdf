@@ -255,6 +255,35 @@ def main():
     write("truncated.tap",
           make_tap(cbm_file("HELLO", 0x0801, hello) + b"\x00\x01"))
 
+    # A SEQ file: a type-4 header, then 192-byte type-2 data blocks. Each
+    # data block is header-sized, and 1.0.3 took the second one for a header
+    # and swallowed the PRG after it - a good file vanished from the dossier.
+    seq_block = bytes([2]) + bytes(range(191))
+    write("seq_then_prg.tap",
+          make_tap(encode_block_pair(
+              cbm_header_block("SEQFILE", 0x033C, 0x03FC, ftype=4))
+              + encode_block_pair(seq_block) + encode_block_pair(seq_block)
+              + cbm_file("AFTER", 0x0801, hello)))
+
+    # A data block whose header was lost, then a good file. The orphan must
+    # not be read as a header, or it consumes REAL as its data.
+    write("lost_header.tap",
+          make_tap(encode_block_pair(bytes([3, 0x01, 0x08, 0x00, 0x10])
+                                     + bytes(195))
+                   + cbm_file("REAL", 0xC000, hello)))
+
+    # The first data copy is damaged (with a checksum that matches the
+    # damage's absence, so it fails); the repeat is intact. The good bytes
+    # are on the tape, so they are the ones to hand over.
+    damaged = bytearray(hello)
+    damaged[10] = 0xFF
+    write("bad_first_copy.tap",
+          make_tap(encode_block_pair(
+              cbm_header_block("BADFIRST", 0x0801, 0x0801 + len(hello)))
+              + encode_block(bytes(damaged), 0x89, LEADER_FIRST,
+                             checksum_override=good)
+              + encode_block(hello, 0x09, LEADER_REPEAT)))
+
 
 if __name__ == "__main__":
     sys.exit(main())
