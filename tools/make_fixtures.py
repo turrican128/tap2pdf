@@ -272,6 +272,25 @@ def main():
                                      + bytes(195))
                    + cbm_file("REAL", 0xC000, hello)))
 
+    # Headers real tapes carry that the ROM never wrote: 191 bytes long
+    # (Activision's no-1541 releases), and a custom type byte (Krystals of
+    # Zong uses 7) whose range the following block matches exactly. Both
+    # are files; neither may be dropped for not looking like a textbook
+    # header.
+    short_hdr = cbm_header_block("MAIN", 0x0316, 0x0316 + 255)[:191]
+    custom_hdr = bytearray(cbm_header_block("", 0x1000, 0x1000 + 64))
+    custom_hdr[0] = 7
+    # And a 187-byte header over a 2-byte file (Tau Ceti's shape): too far
+    # from 192 to be taken on trust, but confirmed by the block after it.
+    tiny_hdr = cbm_header_block("PATCH", 0x0302, 0x0304)[:187]
+    write("custom_headers.tap",
+          make_tap(encode_block_pair(short_hdr)
+                   + encode_block_pair(bytes(range(255)))
+                   + encode_block_pair(bytes(custom_hdr))
+                   + encode_block_pair(hello)
+                   + encode_block_pair(tiny_hdr)
+                   + encode_block_pair(b"\x34\x12")))
+
     # The first data copy is damaged (with a checksum that matches the
     # damage's absence, so it fails); the repeat is intact. The good bytes
     # are on the tape, so they are the ones to hand over.

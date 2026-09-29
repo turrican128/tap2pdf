@@ -27,12 +27,25 @@ something untrue. **Take this version.**
   taken - the feature is not implemented. Provenance now says "not used",
   and the run exits 6 after writing everything else, as the exit-code table
   promises for an unavailable enrichment.
-- **A good file could vanish from the Files table.** Any 192-byte block was
-  taken for a header, so a SEQ file's second data block, or a data block
-  whose header was lost, swallowed the next real file as its "data". Headers
-  are now recognised by length *and* type byte, SEQ files are assembled
-  from all their data blocks (and extracted as `.seq`, without a load
-  address), and a header followed by another header stays a loose block.
+- **A good file could vanish from the Files table, and a bad one appear.**
+  Any block of 192 bytes or more was taken for a header, so a SEQ file's
+  second data block, or a data block whose header was lost, swallowed the
+  next real file as its "data" - while real headers a byte short were
+  skipped. A header is now header-sized and either carries a documented
+  type, or declares a range the next block matches exactly: the tape itself
+  confirming it. SEQ files are assembled from all their data blocks (and
+  extracted as `.seq`, without a load address).
+
+  Swept over 544 local tapes against 1.0.3, this is what changed: five
+  tapes 1.0.3 said had "nothing read" now list their loader file
+  (Activision/Virgin 191-byte headers - Doriath, Falcon Patrol II,
+  Ghettoblaster, International Karate x2), four no-1541 tapes lose a
+  garbage file and a false FAIL (Ghostbusters, Master of the Lamps,
+  Rock n' Bolt, Star League Baseball), Quedex finds its DEMO file instead
+  of a garbage one, and Tau Ceti's 187-byte header over a 2-byte patch is
+  read. Krystals of Zong's type-7 headers are kept.
+- When CBM blocks decode but none forms a file, the verdict no longer says
+  no block could be decoded.
 - **`--extract` wrote the damaged copy when the repeat was intact.** When the
   first copy fails its checksum and the repeat passes, the repeat's bytes
   are used, the Files table says `ok (repeat copy)`, and extraction says so.
@@ -54,6 +67,19 @@ something untrue. **Take this version.**
   C64 platform byte is not a pass. TAP version 2 is refused as unsupported
   rather than "unknown". `--max-size` must be a positive number: `inf` and
   `nan` crashed with a traceback, `0` and negatives were accepted.
+
+### tools/qa_sweep.py
+
+- Every tape is now rendered to HTML and NFO, not only analysed, so a
+  renderer crash is caught.
+- A dossier that contradicts itself (a clean verdict beside a FAIL, or a
+  non-ASCII NFO) is a bug like a crash: exit 1.
+- Oversized dossiers (`--max-html-kb`, default 400) and shredded tapes
+  (`--max-regions`, default 200) are flagged - the 1.0.3 Night Breed
+  failure would have been caught here.
+- Each check's result is recorded by name, and `--compare` says which
+  check moved on which tape.
+- A per-check PASS / FAIL / NOT CHECKED table across the whole archive.
 
 ## 1.0.3
 

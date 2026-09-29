@@ -186,6 +186,16 @@ Sega conversions, multi-side releases, up to 2.4M pulses - with no crashes and
 no contradictory verdicts. None of those tapes are in this repository, which is
 the whole reason the sweep exists.
 
+1.0.4 was swept over 552 local tapes - 488 commercial originals and the
+rest modern releases - against a 1.0.3 baseline: no crashes, no
+self-contradicting dossiers, one tape correctly refused as truncated, and
+every changed verdict inspected by hand.
+
+Every tape is rendered as well as analysed. A dossier that contradicts
+itself - a clean verdict beside a FAIL - counts as a bug like a crash, and a
+dossier over `--max-html-kb` or a tape split into more than `--max-regions`
+regions is flagged. `--compare` names each check that moved.
+
 Its invariant: **a refusal is a pass, a crash is a bug.** Refusing a damaged tape is the tool working. `--compare` diffs a run against a saved baseline, which is what to use after changing anything in the classifier.
 
 ## Building from source

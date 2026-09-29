@@ -650,19 +650,47 @@ def _best_copy(first, repeat):
     return first, False
 
 
-def _is_header(block, repeat=None):
-    """A ROM-loader header is exactly 192 bytes and starts with a header
-    type. Length alone is not enough: a SEQ data block is also 192 bytes,
-    and 1.0.3 read one as a header and swallowed the next file as its data.
+# The ROM writes 192-byte headers, but real tapes carry 191 (Activision's
+# no-1541 releases) and 193 (Buggy Boy), so one byte either way is allowed.
+HEADER_LENGTHS = (HEADER_PAYLOAD - 1, HEADER_PAYLOAD, HEADER_PAYLOAD + 1)
+# Further from 192 (Tau Ceti's is 187), a block is only a header when the
+# tape confirms it: its declared range matches the next block exactly.
+CONFIRMABLE_LENGTHS = range(HEADER_PAYLOAD - 32, HEADER_PAYLOAD + 33)
+
+
+def _range_of(payload):
+    load = payload[1] | (payload[2] << 8)
+    end = payload[3] | (payload[4] << 8)
+    return ((end or 0x10000) - load) if (end == 0 or end > load) else None
+
+
+def _is_header(block, repeat=None, following=None):
+    """Whether a block pair is a ROM-loader header.
+
+    Length alone is not enough: a SEQ data block is also 192 bytes, and 1.0.3
+    read one as a header and swallowed the next file as its data. The type
+    byte alone is too strict: custom loaders use the ROM format with their own
+    header types (Krystals of Zong uses 7). So a header is header-sized and
+    either carries a documented header type, or declares a range that the
+    block after it matches exactly - the tape itself confirming it.
     """
     b, _ = _best_copy(block, repeat)
-    return (len(b.payload) == HEADER_PAYLOAD
-            and b.payload[0] in HEADER_TYPES + (END_OF_TAPE_TYPE,))
+    p = b.payload
+    if len(p) not in CONFIRMABLE_LENGTHS or p[0] == SEQ_DATA_TYPE:
+        return False
+    if (len(p) in HEADER_LENGTHS
+            and p[0] in HEADER_TYPES + (END_OF_TAPE_TYPE,)):
+        return True
+    if following is None:
+        return False
+    data, _ = _best_copy(*following)
+    span = _range_of(p)
+    return span is not None and span == len(data.payload)
 
 
 def _is_seq_data(block, repeat=None):
     b, _ = _best_copy(block, repeat)
-    return len(b.payload) == HEADER_PAYLOAD and b.payload[0] == SEQ_DATA_TYPE
+    return len(b.payload) in HEADER_LENGTHS and b.payload[0] == SEQ_DATA_TYPE
 
 
 def build_files(pairs):
@@ -670,7 +698,8 @@ def build_files(pairs):
     i = 0
     while i < len(pairs):
         hdr_first, hdr_repeat = pairs[i]
-        if not _is_header(hdr_first, hdr_repeat):
+        following = pairs[i + 1] if i + 1 < len(pairs) else None
+        if not _is_header(hdr_first, hdr_repeat, following):
             i += 1                           # a loose block: counted, not a file
             continue
         hdr, _ = _best_copy(hdr_first, hdr_repeat)
@@ -712,9 +741,15 @@ def build_files(pairs):
 
         # PRG: the next block pair is its data - unless it is itself a
         # header, in which case this header lost its data and stays loose.
-        if i + 1 >= len(pairs) or (_is_header(*pairs[i + 1])
-                                   and (end or 0x10000) - load
-                                   != HEADER_PAYLOAD):
+        # A header-shaped block whose length is exactly this header's range
+        # is its data, whatever its first byte happens to be.
+        if following is None:
+            i += 1
+            continue
+        next_best, _ = _best_copy(*following)
+        if (_is_header(following[0], following[1],
+                       pairs[i + 2] if i + 2 < len(pairs) else None)
+                and _range_of(p) != len(next_best.payload)):
             i += 1
             continue
         data_first, data_repeat = pairs[i + 1]
@@ -1192,6 +1227,13 @@ def verdict(checks, regions, files=None):
                                                for c in failed)))
     elif has_cbm and decoded:
         parts.append("The CBM portion of this tape reads cleanly.")
+    elif any(c.name == "CBM block checksums" and c.result != NOT_CHECKED
+             for c in checks):
+        # Blocks WERE decoded - saying none could be would be false. They
+        # just never formed a header followed by its data.
+        parts.append("CBM ROM-loader blocks were decoded, but none of them "
+                     "forms a complete file (a header followed by its data), "
+                     "so no file has been read.")
     elif has_cbm:
         parts.append("Pulses shaped like the CBM ROM loader are present, but "
                      "no complete block could be decoded from them, so "

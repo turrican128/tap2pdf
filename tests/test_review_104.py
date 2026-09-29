@@ -308,3 +308,32 @@ def test_a_nonsense_size_limit_is_a_usage_error(value, tmp_path):
               "-o", tmp_path / "x.html")
     assert res.returncode == tap2pdf.EXIT_USAGE
     assert "Traceback" not in res.stderr
+
+
+# ------------------------------------------- found by the archive sweep --
+def test_a_191_byte_header_and_a_custom_header_type_are_files():
+    # Seen on real tapes: Activision's no-1541 releases carry 191-byte
+    # headers, Krystals of Zong uses header type 7. The first 1.0.4 draft
+    # dropped both, losing real files.
+    d = dossier(FIXTURES / "custom_headers.tap")
+    assert [(f.name, f.load, f.size) for f in d.files] == [
+        ("MAIN", 0x0316, 255), ("", 0x1000, 64), ("PATCH", 0x0302, 2)]
+    assert checks(d)["File length vs header range"].result == tap2pdf.PASS
+    assert checks(d)["Block structure"].result == tap2pdf.PASS
+
+
+def test_a_custom_type_is_not_a_header_unless_the_tape_confirms_it(tmp_path):
+    hdr = bytearray(mf.cbm_header_block("", 0x1000, 0x1000 + 999))
+    hdr[0] = 7
+    tape = write_tape(tmp_path, "unconfirmed.tap",
+                      mf.encode_block_pair(bytes(hdr))
+                      + mf.encode_block_pair(HELLO))
+    assert dossier(tape).files == []
+
+
+def test_decoded_blocks_with_no_file_are_not_called_undecodable(tmp_path):
+    tape = write_tape(tmp_path, "loose.tap", mf.encode_block_pair(HELLO))
+    d = dossier(tape)
+    assert d.files == []
+    assert "no complete block could be decoded" not in d.verdict_text
+    assert "were decoded" in d.verdict_text

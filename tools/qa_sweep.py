@@ -16,6 +16,16 @@ working correctly, and is not counted as a failure. An unhandled traceback
 is always a failure, whatever the tape looked like.
 
 Nothing here writes into the folder being scanned.
+
+Beyond crashes, every tape is rendered to HTML and NFO in memory, and the
+result is held to two more standards:
+
+  - a contradiction - the verdict says the CBM portion reads cleanly while a
+    check in the same report FAILs, or the NFO is not 7-bit ASCII - is a bug
+    exactly like a crash;
+  - a dossier over --max-html-kb, or more regions than --max-regions, is
+    flagged: 1.0.3 shredded one tape into 4,112 regions and a 997 KB
+    dossier that no browser could turn into a PDF, and nothing here noticed.
 """
 import argparse
 import json
@@ -65,7 +75,8 @@ def examine(path, root=None):
            "name": os.path.basename(path), "bytes": 0, "outcome": "crash",
            "exit_code": None, "error": "", "version": None, "platform": None,
            "duration_s": 0.0, "elapsed_s": 0.0, "pulses": 0, "regions": [],
-           "files": 0, "checks": {}, "verdict": ""}
+           "files": 0, "checks": {}, "check_results": {}, "verdict": "",
+           "region_count": 0, "html_bytes": 0, "problems": []}
     started = time.time()
     try:
         # Same limit the CLI applies. One oversized tape in an archive must
@@ -82,14 +93,24 @@ def examine(path, root=None):
         counts = {tap2pdf.PASS: 0, tap2pdf.FAIL: 0, tap2pdf.NOT_CHECKED: 0}
         for c in d.checks:
             counts[c.result] = counts.get(c.result, 0) + 1
+        # Render both documents: a crash in the renderer is a crash, and the
+        # rendered size is what a browser has to lay out for --pdf.
+        html = tap2pdf.render_html(d)
+        nfo = tap2pdf.render_nfo(d)
         row.update({
             "outcome": "ok", "exit_code": 0,
             "version": d.header.version, "platform": d.header.platform,
             "duration_s": round(d.duration, 2), "pulses": d.pulse_count,
             "regions": sorted(set(r.kind for r in d.regions)),
+            "region_count": len(d.regions),
             "files": len(d.files), "checks": counts,
+            "check_results": dict((c.name, c.result) for c in d.checks),
             "verdict": d.verdict_text,
+            "html_bytes": len(html.encode("utf-8")),
+            "problems": contradictions(d, nfo),
         })
+        if row["problems"]:
+            row["outcome"] = "contradiction"
     except tap2pdf.Refusal as r:
         # Refusing a bad tape is the tool working correctly.
         row["outcome"] = "refused"
@@ -100,6 +121,23 @@ def examine(path, root=None):
         row["error"] = traceback.format_exc(limit=6).strip()
     row["elapsed_s"] = round(time.time() - started, 2)
     return row
+
+
+def contradictions(d, nfo):
+    """Statements in one dossier that cannot all be true."""
+    out = []
+    failed = [c.name for c in d.checks if c.result == tap2pdf.FAIL]
+    if failed and "reads cleanly" in d.verdict_text:
+        out.append("verdict says the tape reads cleanly, but %s FAIL"
+                   % ", ".join(failed))
+    if not d.files and "reads cleanly" in d.verdict_text:
+        out.append("verdict says the tape reads cleanly, but no file was "
+                   "recovered")
+    try:
+        nfo.encode("ascii")
+    except UnicodeEncodeError as exc:
+        out.append("NFO is not 7-bit ASCII: %s" % exc)
+    return out
 
 
 def sweep(paths, progress=False, root=None):
@@ -140,6 +178,17 @@ def compare(baseline, current):
         elif old.get("checks") != r.get("checks"):
             changes.append("CHECKS   %s: %s -> %s"
                            % (_key(r), old.get("checks"), r.get("checks")))
+        else:
+            continue
+        # Which named checks moved. A baseline written before check_results
+        # existed has none, and then this says nothing.
+        before = old.get("check_results") or {}
+        after = r.get("check_results") or {}
+        for name in sorted(set(before) | set(after)):
+            if before and after and before.get(name) != after.get(name):
+                changes.append("    %-28s %s -> %s"
+                               % (name[:28], before.get(name, "-"),
+                                  after.get(name, "-")))
     seen = set(_key(r) for r in current)
     for name in was:
         if name not in seen:
@@ -147,13 +196,32 @@ def compare(baseline, current):
     return changes
 
 
-def report(rows, slow_seconds):
+def check_summary(rows):
+    """PASS / FAIL / NOT CHECKED per check, across every tape that read."""
+    table = {}
+    for r in rows:
+        for name, result in (r.get("check_results") or {}).items():
+            t = table.setdefault(name, {tap2pdf.PASS: 0, tap2pdf.FAIL: 0,
+                                        tap2pdf.NOT_CHECKED: 0})
+            t[result] = t.get(result, 0) + 1
+    lines = ["%-30s %6s %6s %12s" % ("CHECK", "PASS", "FAIL", "NOT CHECKED")]
+    for name in sorted(table):
+        t = table[name]
+        lines.append("%-30s %6d %6d %12d"
+                     % (name[:30], t[tap2pdf.PASS], t[tap2pdf.FAIL],
+                        t[tap2pdf.NOT_CHECKED]))
+    return lines
+
+
+def report(rows, slow_seconds, max_html_kb=400, max_regions=200):
     print("%-40s %-8s %5s %8s %6s  %s"
           % ("TAPE", "OUTCOME", "FILES", "PULSES", "SECS", "NOTE"))
     print("-" * 110)
     for r in rows:
         if r["outcome"] == "ok":
             note = r["verdict"]
+        elif r["outcome"] == "contradiction":
+            note = "; ".join(r["problems"])
         else:
             tail = r["error"].splitlines()
             note = tail[-1] if tail else ""
@@ -162,26 +230,52 @@ def report(rows, slow_seconds):
                  r["elapsed_s"], str(note)[:110]))
 
     crashes = [r for r in rows if r["outcome"] == "crash"]
+    contra = [r for r in rows if r["outcome"] == "contradiction"]
     refused = [r for r in rows if r["outcome"] == "refused"]
     failing = [r for r in rows
-               if r["outcome"] == "ok" and r["checks"].get(tap2pdf.FAIL)]
+               if r["outcome"] in ("ok", "contradiction")
+               and r["checks"].get(tap2pdf.FAIL)]
     slow = [r for r in rows if r["elapsed_s"] >= slow_seconds]
+    large = [r for r in rows if r.get("html_bytes", 0) > max_html_kb * 1024]
+    shredded = [r for r in rows if r.get("region_count", 0) > max_regions]
 
     print()
-    print("%d tape(s): %d ok, %d refused, %d crashed."
-          % (len(rows), len(rows) - len(refused) - len(crashes),
-             len(refused), len(crashes)))
+    print("%d tape(s): %d ok, %d refused, %d crashed, %d contradicted "
+          "themselves."
+          % (len(rows), len(rows) - len(refused) - len(crashes) - len(contra),
+             len(refused), len(crashes), len(contra)))
     print("%d tape(s) read but carry at least one failing check."
           % len(failing))
     if slow:
         print("slow (>= %.1fs): %s"
               % (slow_seconds, ", ".join(_key(r) for r in slow)))
+    if large:
+        print("dossier over %d KB (a browser may not render the PDF): %s"
+              % (max_html_kb, ", ".join("%s (%d KB)"
+                                         % (_key(r), r["html_bytes"] // 1024)
+                                         for r in large)))
+    if shredded:
+        print("more than %d regions (the classifier may be shredding the "
+              "tape): %s" % (max_regions, ", ".join(
+                  "%s (%d)" % (_key(r), r["region_count"])
+                  for r in shredded)))
+    summary = check_summary(rows)
+    if len(summary) > 1:
+        print()
+        for line in summary:
+            print(line)
     if crashes:
         print()
         print("CRASHES - these are bugs in tap2pdf, not bad tapes:")
         for r in crashes:
             print("  %s\n%s\n" % (_key(r), r["error"]))
-    return crashes
+    if contra:
+        print()
+        print("CONTRADICTIONS - the dossier states things that cannot all "
+              "be true:")
+        for r in contra:
+            print("  %s: %s" % (_key(r), "; ".join(r["problems"])))
+    return crashes + contra
 
 
 def main(argv=None):
@@ -194,6 +288,10 @@ def main(argv=None):
     p.add_argument("--compare", metavar="FILE",
                    help="diff against a saved run")
     p.add_argument("--slow-seconds", type=float, default=10.0)
+    p.add_argument("--max-html-kb", type=int, default=400,
+                   help="flag a dossier larger than this (default 400)")
+    p.add_argument("--max-regions", type=int, default=200,
+                   help="flag a tape split into more regions (default 200)")
     args = p.parse_args(argv)
 
     if not os.path.isdir(args.folder):
@@ -205,7 +303,8 @@ def main(argv=None):
         return 0
 
     rows = sweep(paths, progress=True, root=args.folder)
-    crashes = report(rows, args.slow_seconds)
+    crashes = report(rows, args.slow_seconds, args.max_html_kb,
+                     args.max_regions)
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:

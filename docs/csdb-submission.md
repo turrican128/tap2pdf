@@ -112,8 +112,9 @@ Command line, no GUI, no dependencies. Single-file binaries for Windows and
 Linux; the Python source is one file and imports nothing outside the standard
 library.
 
-Verified against 49 commercial tapes with no crashes. 1.0.4 is the first
-release checked against a real TAPClean report; see the CHANGELOG.
+Swept over 552 tapes - 488 commercial originals plus modern releases -
+with no crashes, and checked against a real TAPClean report; see the
+CHANGELOG.
 
 Source and full documentation:
 https://github.com/turrican128/tap2pdf
