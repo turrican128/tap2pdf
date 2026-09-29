@@ -192,6 +192,12 @@ rest modern releases - against a 1.0.3 baseline: no crashes, no
 self-contradicting dossiers, one tape correctly refused as truncated, and
 every changed verdict inspected by hand.
 
+1.0.5 touched the output guards and the copy comparison, so it was re-swept
+against a 1.0.4 baseline over the 49 commercial tapes still on the build
+machine: no crashes, no self-contradicting dossiers, and not one verdict
+moved. The 552-tape archive is not kept locally, so that larger sweep stands
+as a 1.0.4 result and is not claimed for 1.0.5.
+
 Every tape is rendered as well as analysed. A dossier that contradicts
 itself - a clean verdict beside a FAIL - counts as a bug like a crash, and a
 dossier over `--max-html-kb` or a tape split into more than `--max-regions`
