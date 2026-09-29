@@ -60,18 +60,29 @@ Upload both, in this order:
 
 ### Screenshot
 
-**There isn't one in the repo yet — you need to make it.** Open
-`examples/example-dossier.html` in a browser and capture the top of the page:
-the title block, the verification report table, and the tape map underneath it.
+Two are in the repo. **Upload `docs/screenshot-dossier.png`** — that is the
+one that sells the tool.
 
-That crop is the entire pitch in one image. It shows the PASS rows, the amber
-`NOT CHECKED` rows with their reasons, the one-sentence verdict, and the
-coloured tape map. Anyone who has ever wondered whether a downloaded tape is
-any good understands the tool immediately from that picture.
+- **`docs/screenshot-dossier.png`** — the top of `examples/example-dossier.html`:
+  the title block, the verification report, and the tape map. It shows the PASS
+  rows, the amber `NOT CHECKED` rows *with their reasons*, the one-sentence
+  verdict that refuses to call the tape clean, and the coloured map. Anyone who
+  has ever wondered whether a downloaded tape is any good understands the tool
+  immediately from that picture.
+- **`docs/screenshot-cli.png`** — the command line: the usage summary and a
+  real run writing the dossier and the PDF. Useful as a second image, for people
+  who want to see it is an ordinary command-line tool with no install.
 
-Do not crop to just the tape map. The map is the prettiest part, but the
-verification report is the part that is actually different from everything else
-out there.
+Do not crop the dossier shot to just the tape map. The map is the prettiest
+part, but the verification report is the part that is actually different from
+everything else out there.
+
+The dossier shot is rendered from the synthetic `example.tap` that ships with
+the tool, so no tape content in it comes from a commercial release. The CLI
+shot names a commercial tape on the command line and shows the two lines the
+tool printed - a filename and two paths, no tape data and no dossier content.
+That is fine to publish; a screenshot of a *dossier* for a commercial tape
+would not be.
 
 ---
 
@@ -130,7 +141,8 @@ https://github.com/turrican128/tap2pdf
 - [ ] `tap2pdf --version` prints `tap2pdf 1.0.5` — not 1.0 and not a `-dev` version
 - [ ] You generated `example-dossier.pdf` and opened it; the tables are not cut
       across page breaks
-- [ ] You made the screenshot, and the verification report is visible in it
+- [ ] You uploaded `docs/screenshot-dossier.png`, and the verification report
+      is visible in it
 - [ ] You opened a dossier and **read it** — every row says something true
 - [ ] `tools/qa_sweep.py` over your own archive: zero crashes
 - [ ] Repository is public and the README renders
