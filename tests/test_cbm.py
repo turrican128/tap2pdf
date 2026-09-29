@@ -50,3 +50,33 @@ def test_no_parity_errors_on_a_clean_tape():
     f = files_of("clean_single.tap")[0]
     assert f.header_block.parity_errors == 0
     assert f.data_block.parity_errors == 0
+
+
+def test_a_trailing_byte_is_a_difference_not_a_match():
+    # Reported by an external reviewer. _compare_copies padded the shorter
+    # payload with zeros, so 64 bytes and the same 64 bytes plus a trailing
+    # zero compared as identical and the tool said the copies agreed.
+    def blk(payload):
+        return tap2pdf.CbmBlock(0x89, payload, 0, 0, 0, 0, 0)
+
+    same = bytes(range(64))
+    diff, missing = tap2pdf._compare_copies(blk(same), blk(same + b"\x00"))
+    assert missing == 0
+    assert diff == 1, "a payload one byte longer must not compare equal"
+
+
+def test_identical_payloads_still_agree():
+    def blk(payload):
+        return tap2pdf.CbmBlock(0x89, payload, 0, 0, 0, 0, 0)
+
+    same = bytes(range(64))
+    assert tap2pdf._compare_copies(blk(same), blk(same)) == (0, 0)
+
+
+def test_a_longer_tail_counts_every_extra_byte():
+    def blk(payload):
+        return tap2pdf.CbmBlock(0x89, payload, 0, 0, 0, 0, 0)
+
+    a = bytes(range(64))
+    diff, _ = tap2pdf._compare_copies(blk(a), blk(a + b"\x00\x00\x00"))
+    assert diff == 3, diff

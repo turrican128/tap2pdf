@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.5
+
+Two findings from a third external review. Both are the same mistake made
+twice: a guard written for the case that was reported rather than for the
+class it belongs to. **Take this version.**
+
+- **Extraction could overwrite the dossier.** `-o out/01_HELLO.prg
+  --extract out` wrote the report, then extraction replaced it with the PRG
+  and exited 0. 1.0.2 checked every output path against the input tape;
+  1.0.4 checked the HTML, NFO and PDF against each other; neither ever
+  checked an extracted file against the report. Every path this run writes
+  is now compared with every other before anything is written, so a
+  collision leaves nothing on disk and exits 1. Extraction into the same
+  folder as the report is still fine - only a real collision is refused.
+- **Copies of different lengths were reported as identical.** The comparison
+  padded the shorter payload with zeros, so 64 bytes and the same 64 bytes
+  plus a trailing zero produced zero differences and the dossier said the
+  two recorded copies agreed. A byte present in one copy and absent from the
+  other is now counted as a difference; only the overlap is compared byte
+  for byte.
+
 ## 1.0.4
 
 A pre-release QA pass against real tapes, a real TAPClean report and a

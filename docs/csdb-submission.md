@@ -1,4 +1,4 @@
-# CSDb submission — tap2pdf 1.0.4
+# CSDb submission — tap2pdf 1.0.5
 
 Everything needed to fill in the "Add release" form at
 <https://csdb.dk/additem.php?type=release>. Same shape as the txt2dirart 1.0.2
@@ -13,7 +13,7 @@ that works on C64 files.
 
 | field | value |
 |---|---|
-| **Name** | `tap2pdf 1.0.4` |
+| **Name** | `tap2pdf 1.0.5` |
 | **Type** | `Other Platform C64 Tool` — same category txt2dirart went under. Confirm the exact wording in the dropdown; CSDb renames these occasionally. |
 | **Released by** | DR.J / Delysid |
 | **Release date** | the day you submit |
@@ -37,7 +37,7 @@ since they own the tapes that would break it.
 
 Upload both, in this order:
 
-1. **`tap2pdf-1.0.4.zip`** — from the GitHub release page, not built locally.
+1. **`tap2pdf-1.0.5.zip`** — from the GitHub release page, not built locally.
    About 14 MB. Contains `tap2pdf.exe` (Windows), `tap2pdf` (Linux),
    `tap2pdf.py` (the source, one file, stdlib only), README, CHANGELOG,
    LICENSE, `examples/` with a tape and the dossier it produces, and
@@ -124,10 +124,10 @@ https://github.com/turrican128/tap2pdf
 
 ## Before you submit — checklist
 
-- [ ] The GitHub release `v1.0.4` exists and its build was green on both platforms
+- [ ] The GitHub release `v1.0.5` exists and its build was green on both platforms
 - [ ] You downloaded the zip **from the release page** and ran **both** binaries
       once on a real machine, not just in CI
-- [ ] `tap2pdf --version` prints `tap2pdf 1.0.4` — not 1.0 and not a `-dev` version
+- [ ] `tap2pdf --version` prints `tap2pdf 1.0.5` — not 1.0 and not a `-dev` version
 - [ ] You generated `example-dossier.pdf` and opened it; the tables are not cut
       across page breaks
 - [ ] You made the screenshot, and the verification report is visible in it

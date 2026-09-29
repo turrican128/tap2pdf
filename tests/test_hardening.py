@@ -158,3 +158,29 @@ def test_the_cli_never_writes_to_the_tape_on_a_normal_run(tmp_path):
             "--extract", str(tmp_path / "out"))
     assert r.returncode == 0, r.stderr
     assert tape.read_bytes() == original
+
+
+def test_extraction_may_not_overwrite_the_report(tmp_path):
+    # Reported by an external reviewer. -o out/01_HELLO.prg --extract out
+    # wrote the dossier, then extraction replaced it with the PRG and exited
+    # 0. 1.0.2 guarded every output path against the input tape but never
+    # against the other outputs; 1.0.4 cross-checked HTML/NFO/PDF but the
+    # extraction targets were never in that set.
+    out = tmp_path / "out"
+    out.mkdir()
+    r = run(str(FIXTURES / "clean_single.tap"),
+            "-o", str(out / "01_HELLO.prg"), "--extract", str(out))
+    assert r.returncode == tap2pdf.EXIT_USAGE, r.stderr
+    # Nothing may be left behind by a refused run.
+    assert not (out / "01_HELLO.prg").exists(), "the report was still written"
+
+
+def test_extraction_beside_the_report_is_fine(tmp_path):
+    # The guard must only fire on a real collision, not on any shared folder.
+    out = tmp_path / "out"
+    out.mkdir()
+    r = run(str(FIXTURES / "clean_single.tap"),
+            "-o", str(out / "report.html"), "--extract", str(out), "--quiet")
+    assert r.returncode == 0, r.stderr
+    assert (out / "report.html").is_file()
+    assert (out / "01_HELLO.prg").is_file()

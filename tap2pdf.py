@@ -13,7 +13,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -630,10 +630,15 @@ def _compare_copies(a, b):
     """
     if b is None:
         return 0, 1
-    n = max(len(a.payload), len(b.payload))
-    pa = a.payload.ljust(n, b"\x00")
-    pb = b.payload.ljust(n, b"\x00")
-    return sum(1 for x, y in zip(pa, pb) if x != y), 0
+    # Zero-padding the shorter payload made "the same bytes plus a trailing
+    # zero" compare as identical, so two copies of different lengths were
+    # reported as agreeing. A byte present in one copy and absent from the
+    # other is a difference; only the overlap can be compared byte for byte.
+    overlap = min(len(a.payload), len(b.payload))
+    differing = sum(1 for x, y in zip(a.payload[:overlap], b.payload[:overlap])
+                    if x != y)
+    differing += abs(len(a.payload) - len(b.payload))
+    return differing, 0
 
 
 HEADER_TYPES = (1, 3, 4)          # PRG (relocatable, fixed) and SEQ headers
@@ -1604,19 +1609,46 @@ def render_nfo(d):
     return "\n".join(line[:NFO_WIDTH] for line in out) + "\n"
 
 
-def extract_files(d, directory, tape_path=None):
-    try:
-        os.makedirs(directory, exist_ok=True)
-    except OSError as exc:
-        raise Refusal(EXIT_OUTPUT, "cannot create %s: %s" % (directory, exc))
-    # Work out every target first and check them all before writing any, so a
-    # refusal on the second file does not leave the first one on disk.
+def extraction_targets(d, directory):
+    """[(file, path)] for --extract, worked out without writing anything.
+
+    Named separately so the output-collision check can see these paths
+    before the dossier is written: `-o out/01_HELLO.prg --extract out` wrote
+    the report and then extraction replaced it, exit 0.
+    """
     targets = []
     for i, f in enumerate(d.files):
         safe = "".join(ch if ch.isalnum() else "_" for ch in f.name) or "file"
         targets.append((f, os.path.join(
             directory, "%02d_%s.%s" % (i + 1, safe,
                                        "seq" if f.is_seq else "prg"))))
+    return targets
+
+
+def refuse_if_outputs_collide(named):
+    """No two things this run writes may share a path.
+
+    Guarding every output against the input tape (1.0.2) and the report paths
+    against each other (1.0.4) still left one pair unchecked: an extracted
+    file and the report itself. Fixing the reported instance instead of the
+    class is how that survived two reviews.
+    """
+    for i, (what_a, a) in enumerate(named):
+        for what_b, b in named[i + 1:]:
+            if _same_path(a, b):
+                raise Refusal(
+                    EXIT_USAGE,
+                    "the %s and the %s would both be written to %s. Nothing "
+                    "has been written. Give them separate paths."
+                    % (what_a, what_b, a))
+
+
+def extract_files(d, directory, tape_path=None):
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        raise Refusal(EXIT_OUTPUT, "cannot create %s: %s" % (directory, exc))
+    targets = extraction_targets(d, directory)
     if tape_path is not None:
         for _f, path in targets:
             refuse_if_clobbers_input(path, tape_path, "extracted file")
@@ -1904,15 +1936,7 @@ def plan_outputs(args):
     named = [(what, p) for what, p in named if p]
     for what, p in named:
         refuse_if_clobbers_input(p, args.tape, what)
-    for i, (what_a, a) in enumerate(named):
-        for what_b, b in named[i + 1:]:
-            if _same_path(a, b):
-                raise Refusal(
-                    EXIT_USAGE,
-                    "the %s and the %s would both be written to %s. -o names "
-                    "the HTML dossier; the NFO and PDF are written beside it "
-                    "as <name>.nfo and <name>.pdf. Give -o a .html path."
-                    % (what_a, what_b, a))
+    refuse_if_outputs_collide(named)
     return html_path, nfo_path, pdf_path
 
 
@@ -1932,6 +1956,16 @@ def main(argv=None):
         dossier = analyse(data, args)
 
         html_path, nfo_path, pdf_path = plan_outputs(args)
+        if args.extract:
+            # Checked before the dossier is written, so a collision leaves
+            # nothing on disk at all.
+            named = [("HTML dossier", html_path), ("NFO", nfo_path),
+                     ("PDF", pdf_path)]
+            named = [(w, q) for w, q in named if q]
+            for f, q in extraction_targets(dossier, args.extract):
+                refuse_if_clobbers_input(q, args.tape, "extracted file")
+                named.append(("extracted file %s" % os.path.basename(q), q))
+            refuse_if_outputs_collide(named)
         _write_text(html_path, render_html(dossier))
         if not args.quiet and not args.pdf_only:
             sys.stderr.write("wrote %s\n" % html_path)
